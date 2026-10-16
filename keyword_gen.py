@@ -54,6 +54,11 @@ TERMINAL = frozenset('。！？!?…～~\n')
 # a geometric length with this per-step stop chance, plus terminal punctuation.
 HEURISTIC_HAZARD = 1 / 12
 GROUP_ASSISTANT = '2854196310'
+# Round 2: longest character context used by the walks, and the number of
+# distinct messages a context needs before it may shift probabilities.
+ORDER = 3
+MIN_SUPPORT = 2
+END, START = '\x03', '\x02'  # Boundary symbols; never emitted, never in chars.
 
 
 def word_char(character):
@@ -72,9 +77,11 @@ class Bounds:
     """
     def __init__(self, texts=()):
         self.starts, self.ends, self.occurrences = Counter(), Counter(), Counter()
+        self.lengths = Counter()
         for text, weight in texts:
             if not text:
                 continue
+            self.lengths[len(text)] += weight
             self.starts[text[0]] += weight
             self.ends[text[-1]] += weight
             for character in text:
@@ -96,18 +103,66 @@ class Bounds:
     def p_end(self, character):
         return self._rate(self.ends, character)
 
+    def draw_length(self, rng):
+        """A message length from the same corpus, clipped to the reply limits."""
+        rows = sorted(self.lengths.items())
+        ticket = rng.random() * sum(w for _, w in rows)
+        for length, w in rows:
+            ticket -= w
+            if ticket < 0:
+                return min(MAX_REPLY, max(MIN_REPLY, length))
+        return min(MAX_REPLY, max(MIN_REPLY, rows[-1][0]))
+
+
+class Contexts:
+    """2..order character contexts of whole messages, both directions (round 2).
+
+    `forward[h][x]` counts how many DISTINCT messages have x (or END) right
+    after the context h; `backward[h][x]` how many have x (or START) right
+    before it. Counting messages instead of occurrences keeps one person's
+    repeated line from looking like broad evidence. Built from the same whole
+    messages as `Bounds`, so the boundary symbols line up with the rates.
+    """
+    def __init__(self, texts=(), order=ORDER):
+        self.order = order
+        self.forward, self.backward = defaultdict(Counter), defaultdict(Counter)
+        for text in sorted({text for text, _ in texts if text}):
+            ahead, behind = set(), set()
+            for index in range(len(text) + 1):
+                following = text[index] if index < len(text) else END
+                preceding = text[index - 1] if index > 0 else START
+                for width in range(2, order + 1):
+                    if index >= width:
+                        ahead.add((text[index - width:index], following))
+                    if index + width <= len(text):
+                        behind.add((text[index:index + width], preceding))
+            for context, value in ahead:
+                self.forward[context][value] += 1
+            for context, value in behind:
+                self.backward[context][value] += 1
+
+    def __bool__(self):
+        return bool(self.forward)
+
 
 @dataclass(frozen=True)
 class Candidate:
     text: str
     seed: str
     score: float
+    complete: bool = True
 
 
 class KeywordGenerator:
-    """Read-only view of one group's `chars` (and pair bans) held in memory."""
+    """Read-only view of one group's `chars` (and pair bans) held in memory.
 
-    def __init__(self, db, *, bounds=None, stop_top=STOP_TOP, attempts=ATTEMPTS):
+    With `contexts`, walks use Witten-Bell interpolation from the longest
+    supported 2..order character context down to round 1's `chars` +
+    `Bounds` distribution; without it they are round 1, draw for draw.
+    """
+
+    def __init__(self, db, *, bounds=None, stop_top=STOP_TOP, attempts=ATTEMPTS,
+                 contexts=None, min_support=MIN_SUPPORT):
         self.forward, self.backward = defaultdict(list), defaultdict(list)
         self.out_total, self.in_total = Counter(), Counter()
         self.edges = {}
@@ -123,6 +178,9 @@ class KeywordGenerator:
             self.banned = {(a, b) for a, b in db.execute('SELECT first, second FROM pair_bans')}
         self.bounds = bounds if bounds is not None else Bounds()
         self.attempts = attempts
+        self.contexts = contexts if contexts else None
+        self.min_support = min_support
+        self._distributions = {}  # The model is read-only, so each context is computed once.
         # Occurrences of c: every in-message use has a predecessor or opens the
         # message; without boundary data the larger side is the best estimate.
         frequency = Counter()
@@ -204,6 +262,93 @@ class KeywordGenerator:
             current = previous
         return out
 
+    def _base(self, character, forward):
+        """Round 1's one-character distribution, with the boundary as a symbol.
+
+        Its support is exactly the learned `chars` edges plus the boundary, so
+        nothing above it can revive a deleted or never-learned pair.
+        """
+        rows = (self.forward if forward else self.backward).get(character, ())
+        boundary = END if forward else START
+        if not rows:
+            return {boundary: 1.0}
+        if self.bounds:
+            stop = self.bounds.p_end(character) if forward else self.bounds.p_start(character)
+        else:
+            stop = HEURISTIC_HAZARD
+        total = sum(w for _, w in rows)
+        dist = {value: (1 - stop) * w / total for value, w in rows}
+        dist[boundary] = stop
+        return dist
+
+    def distribution(self, context, forward):
+        """P(next | context) forward or P(previous | context) backward.
+
+        `context` is the text on the walk's side of the next symbol, nearest
+        character last (forward) or first (backward). Witten-Bell mixing:
+        P_k = (c(h,x) + T(h) P_{k-1}) / (N(h) + T(h)), using only contexts seen
+        in at least `min_support` distinct messages, and only counts for
+        symbols the base distribution allows.
+        """
+        cached = self._distributions.get((context, forward))
+        if cached is not None:
+            return cached
+        dist = self._base(context[-1] if forward else context[0], forward)
+        if self.contexts is None:
+            return dist
+        table = self.contexts.forward if forward else self.contexts.backward
+        for width in range(2, min(self.contexts.order, len(context)) + 1):
+            h = context[-width:] if forward else context[:width]
+            counts = {x: c for x, c in table.get(h, {}).items() if x in dist}
+            n = sum(counts.values())
+            if n < self.min_support:
+                break  # Longer contexts are at most this frequent.
+            t = len(counts)
+            dist = {x: (counts.get(x, 0) + t * p) / (n + t) for x, p in dist.items()}
+        self._distributions[(context, forward)] = dist
+        return dist
+
+    def _walk(self, text, budget, forward, rng):
+        """Extend `text` on one side; returns (added, reached_boundary)."""
+        added = ''
+        boundary = END if forward else START
+        while len(added) < budget:
+            whole = text + added if forward else added + text
+            context = whole[-self.contexts.order:] if forward else whole[:self.contexts.order]
+            dist = self.distribution(context, forward)
+            ticket = rng.random() * sum(dist.values())
+            choice = boundary
+            for value in sorted(dist):
+                ticket -= dist[value]
+                if ticket < 0:
+                    choice = value
+                    break
+            if choice == boundary:
+                return added, True
+            added = added + choice if forward else choice + added
+        return added, False
+
+    def grow_contexts(self, seed, rng):
+        """Round 2: (text, complete) through `seed`, or None if too short or unsafe."""
+        budget = MAX_REPLY - len(seed)
+        if rng.random() < .5:
+            after, ended = self._walk(seed, budget, True, rng)
+            before, started = self._walk(seed + after, budget - len(after), False, rng)
+        else:
+            before, started = self._walk(seed, budget, False, rng)
+            after, ended = self._walk(before + seed, budget - len(before), True, rng)
+        text = before + seed + after
+        if not self._acceptable(text):
+            return None
+        return text, ended and started
+
+    def _acceptable(self, text):
+        if len(text) < MIN_REPLY or len(text) > MAX_REPLY:
+            return False
+        if self.banned and any(pair in self.banned for pair in zip(text, text[1:])):
+            return False  # Same outbound rule as Bot: a banned pair drops the reply.
+        return not structural_issue(text)
+
     def grow(self, seed, rng):
         """One sentence through `seed`, or None when it is too short or unsafe."""
         budget = MAX_REPLY - len(seed)
@@ -215,13 +360,7 @@ class KeywordGenerator:
             before = self._backward(seed[0], budget, rng)
             after = self._forward(seed[-1], budget - len(before), rng)
         text = before + seed + after
-        if len(text) < MIN_REPLY or len(text) > MAX_REPLY:
-            return None
-        if self.banned and any(pair in self.banned for pair in zip(text, text[1:])):
-            return None  # Same outbound rule as Bot: a banned pair drops the reply.
-        if structural_issue(text):
-            return None
-        return text
+        return text if self._acceptable(text) else None
 
     # ---- scoring -----------------------------------------------------------
 
@@ -265,6 +404,12 @@ class KeywordGenerator:
         keywords = self.keyword_chars(text)
         stripped = text.strip()
         best = None
+        # Round 2: a keyword usually sits mid-sentence and each side stops with
+        # a memoryless rate, so raw candidates run about twice a real message,
+        # and keyword scoring favours long ones further. Rank by closeness to
+        # a length drawn from real messages first, in 4-character bands.
+        target = (self.bounds.draw_length(rng)
+                  if self.contexts is not None and self.bounds.lengths else None)
         for _ in range(self.attempts):
             ticket = rng.random() * sum(score for _, score in seeds)
             seed = seeds[-1][0]
@@ -273,13 +418,25 @@ class KeywordGenerator:
                 if ticket < 0:
                     seed = span
                     break
-            candidate = self.grow(seed, rng)
+            if self.contexts is None:
+                candidate, complete = self.grow(seed, rng), True
+            else:
+                grown = self.grow_contexts(seed, rng)
+                candidate, complete = grown if grown else (None, False)
             if candidate is None or candidate in stripped:
                 continue  # Echoing (part of) the input is not a reply.
-            scored = Candidate(candidate, seed, self.score(candidate, keywords))
-            if best is None or (scored.score, scored.text) > (best.score, best.text):
+            scored = Candidate(candidate, seed, self.score(candidate, keywords), complete)
+            # Round 2 prefers sentences that reached a real start and end over
+            # ones cut by the length cap; round 1 marks every candidate complete.
+            rank = self._rank(scored, target)
+            if best is None or rank > self._rank(best, target):
                 best = scored
         return best
+
+    @staticmethod
+    def _rank(candidate, target):
+        band = 0 if target is None else -(abs(len(candidate.text) - target) // 4)
+        return candidate.complete, band, candidate.score, candidate.text
 
 
 # ---- offline harness -------------------------------------------------------
@@ -422,7 +579,7 @@ def compare(args):
         training = messages[:split]
         # Chunks, not messages: `chars` never links across an attachment, so a
         # chunk edge is exactly where a walk has no in-message neighbour.
-        bounds = Bounds((chunk, 1) for _, chunks in training for chunk in chunks)
+        sentences = [(chunk, 1) for _, chunks in training for chunk in chunks]
         whole = {message for message, _ in training}
         source = {'export': str(args.export), 'sha256': digest(args.export),
                   'messages': len(messages), 'trained': split}
@@ -432,12 +589,13 @@ def compare(args):
     db = sqlite3.connect(model)
     try:
         if messages is None:
-            memories = memory_texts(db)
-            bounds = Bounds(memories) if not args.heuristic_bounds else Bounds()
-            whole = {text for text, _ in memories}
-        elif args.heuristic_bounds:
-            bounds = Bounds()
-        generator = KeywordGenerator(db, bounds=bounds, attempts=args.attempts)
+            sentences = memory_texts(db)
+            whole = {text for text, _ in sentences}
+        bounds = Bounds() if args.heuristic_bounds else Bounds(sentences)
+        contexts = Contexts(sentences, args.order) if args.order > 1 else None
+        round_one = KeywordGenerator(db, bounds=bounds, attempts=args.attempts)
+        generator = KeywordGenerator(db, bounds=bounds, attempts=args.attempts,
+                                     contexts=contexts, min_support=args.min_support)
         prompts, prompt_source, held_out = load_prompts(args, messages, db)
     finally:
         db.close()
@@ -460,36 +618,47 @@ def compare(args):
             if baseline and bot.breaking_pair(baseline) is not None:
                 baseline = None
             middle = time.perf_counter()
+            first = round_one.reply(prompt, random.Random(seed))
+            between = time.perf_counter()
             found = generator.reply(prompt, random.Random(seed))
             finished = time.perf_counter()
             rows.append({'prompt': prompt, 'baseline': baseline,
+                         'keyword_v1': first.text if first else None,
                          'keyword': found.text if found else None,
                          'seed_span': found.seed if found else None,
+                         'complete': found.complete if found else None,
                          'baseline_ms': (middle - started) * 1000,
-                         'keyword_ms': (finished - middle) * 1000})
+                         'keyword_v1_ms': (between - middle) * 1000,
+                         'keyword_ms': (finished - between) * 1000})
     finally:
         bot.close()
+    spoken = [row for row in rows if row['keyword']]
     metrics = {
         'source': source, 'prompt_source': prompt_source, 'held_out': held_out,
         'boundaries': ('whole_messages' if bounds else 'heuristic'),
         'boundary_messages': bounds.messages,
         'params': {'seed': args.seed, 'attempts': args.attempts, 'blend': args.blend,
-                   'refine': args.refine, 'group': args.group, 'stop_top': STOP_TOP},
+                   'refine': args.refine, 'group': args.group, 'stop_top': STOP_TOP,
+                   'order': args.order, 'min_support': args.min_support},
         'code_sha256': digest(__file__),
         'baseline': summarize(rows, 'baseline', generator, corpus, whole),
-        'keyword': summarize(rows, 'keyword', generator, corpus, whole),
+        'keyword_v1': summarize(rows, 'keyword_v1', generator, corpus, whole),
+        'keyword': dict(summarize(rows, 'keyword', generator, corpus, whole),
+                        complete_rate=(round(sum(r['complete'] for r in spoken) / len(spoken), 4)
+                                       if spoken else None)),
     }
     with open(out / 'compare.tsv', 'w', encoding='utf-8', newline='') as handle:
-        handle.write('index\tprompt\tbaseline\tkeyword\tseed_span\n')
+        handle.write('index\tprompt\tbaseline\tkeyword_v1\tkeyword\tseed_span\n')
         for index, row in enumerate(rows):
             cells = [str(index)] + [clean_cell(row[k]) for k in
-                                    ('prompt', 'baseline', 'keyword', 'seed_span')]
+                                    ('prompt', 'baseline', 'keyword_v1', 'keyword', 'seed_span')]
             handle.write('\t'.join(cells) + '\n')
     write_blind(out, rows, random.Random(args.seed + 1))
+    write_blind(out, rows, random.Random(args.seed + 2), opponent='keyword_v1', name='v1')
     (out / 'metrics.json').write_text(json.dumps(metrics, ensure_ascii=False, indent=2),
                                       encoding='utf-8')
     print(json.dumps({k: metrics[k] for k in ('prompt_source', 'held_out', 'boundaries',
-                                              'baseline', 'keyword')},
+                                              'baseline', 'keyword_v1', 'keyword')},
                      ensure_ascii=False, indent=2))
     print(f'输出目录：{out}')
 
@@ -498,19 +667,25 @@ def clean_cell(value):
     return '' if value is None else value.replace('\t', ' ').replace('\r', ' ').replace('\n', '⏎')
 
 
-def write_blind(out, rows, rng):
-    """Left/right-shuffled pairs for a human reader; the key lives in its own file."""
+def blind_names(name):
+    suffix = f'_{name}' if name else ''
+    return f'blind_pairs{suffix}.tsv', f'answer_key{suffix}.json', f'tally{suffix}.json'
+
+
+def write_blind(out, rows, rng, *, opponent='baseline', name=''):
+    """Left/right-shuffled pairs for a reader; the key lives in its own file."""
+    pairs, answers, _ = blind_names(name)
     key = {}
-    with open(out / 'blind_pairs.tsv', 'w', encoding='utf-8', newline='') as handle:
+    with open(out / pairs, 'w', encoding='utf-8', newline='') as handle:
         handle.write('index\tprompt\tleft\tright\tchoice(left/right/same/both_bad)\n')
         for index, row in enumerate(rows):
-            sides = ['baseline', 'keyword']
+            sides = [opponent, 'keyword']
             rng.shuffle(sides)
             key[index] = sides
             handle.write('\t'.join([str(index), clean_cell(row['prompt']),
                                     clean_cell(row[sides[0]]) or '（无回复）',
                                     clean_cell(row[sides[1]]) or '（无回复）', '']) + '\n')
-    (out / 'answer_key.json').write_text(json.dumps(key, indent=1), encoding='utf-8')
+    (out / answers).write_text(json.dumps(key, indent=1), encoding='utf-8')
 
 
 CHOICES = ('left', 'right', 'same', 'both_bad')
@@ -519,9 +694,12 @@ CHOICES = ('left', 'right', 'same', 'both_bad')
 def tally(args):
     """Aggregate a filled blind_pairs.tsv into counts only -- no chat text."""
     out = Path(args.out)
-    key = json.loads((out / 'answer_key.json').read_text(encoding='utf-8'))
+    pairs, answers, result = blind_names(getattr(args, 'name', ''))
+    key = json.loads((out / answers).read_text(encoding='utf-8'))
+    opponent = next((side for sides in key.values() for side in sides if side != 'keyword'),
+                    'baseline')
     counts, blank, invalid = Counter(), 0, 0
-    lines = (out / 'blind_pairs.tsv').read_text(encoding='utf-8-sig').splitlines()[1:]
+    lines = (out / pairs).read_text(encoding='utf-8-sig').splitlines()[1:]
     for line in lines:
         cells = line.split('\t')
         choice = cells[4].strip().lower() if len(cells) > 4 else ''
@@ -534,12 +712,13 @@ def tally(args):
         else:
             counts[choice] += 1
     judged = sum(counts.values())
-    summary = {'pairs': len(lines), 'judged': judged, 'blank': blank, 'invalid': invalid,
+    summary = {'opponent': opponent, 'pairs': len(lines), 'judged': judged, 'blank': blank,
+               'invalid': invalid,
                **{name: counts[name] for name in
-                  ('keyword_wins', 'baseline_wins', 'same', 'both_bad')},
-               'keyword_net_win_rate': (round((counts['keyword_wins'] - counts['baseline_wins'])
+                  ('keyword_wins', opponent + '_wins', 'same', 'both_bad')},
+               'keyword_net_win_rate': (round((counts['keyword_wins'] - counts[opponent + '_wins'])
                                               / judged, 4) if judged else None)}
-    (out / 'tally.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+    (out / result).write_text(json.dumps(summary, indent=2), encoding='utf-8')
     print(json.dumps(summary, indent=2))
 
 
@@ -549,8 +728,11 @@ def interactive(args):
     snapshot(args.db, model)
     db = sqlite3.connect(model)
     try:
-        bounds = Bounds() if args.heuristic_bounds else Bounds(memory_texts(db))
-        generator = KeywordGenerator(db, bounds=bounds, attempts=args.attempts)
+        memories = memory_texts(db)
+        bounds = Bounds() if args.heuristic_bounds else Bounds(memories)
+        contexts = Contexts(memories, args.order) if args.order > 1 else None
+        generator = KeywordGenerator(db, bounds=bounds, attempts=args.attempts,
+                                     contexts=contexts, min_support=args.min_support)
     finally:
         db.close()
     bot = Bot(str(model), self_id='keyword-gen-offline', group_id=args.group,
@@ -583,6 +765,10 @@ def main():
     common.add_argument('--seed', type=int, default=1)
     common.add_argument('--heuristic-bounds', action='store_true',
                         help='不用整句边界统计，改用标点与几何长度')
+    common.add_argument('--order', type=int, default=ORDER, choices=(1, 2, 3, 4),
+                        help='第二轮最长字符上下文；1 等于第一轮原型')
+    common.add_argument('--min-support', type=int, default=MIN_SUPPORT,
+                        help='上下文至少出现在多少条不同消息中才参与')
     common.add_argument('--out', default=str(WORK))
     run = sub.add_parser('compare', parents=[common], help='基线与关键字生成的批量对比')
     data = run.add_mutually_exclusive_group(required=True)
@@ -598,6 +784,7 @@ def main():
     reply.add_argument('text', nargs='*')
     count = sub.add_parser('tally', help='汇总已填写的 blind_pairs.tsv，只输出计数')
     count.add_argument('--out', default=str(WORK))
+    count.add_argument('--name', default='', help='留空为对基线；v1 为对第一轮原型')
     args = parser.parse_args()
     if args.command == 'compare':
         if not 0 < args.holdout < 1:

@@ -1,0 +1,12 @@
+{
+  "opponent": "baseline",
+  "pairs": 150,
+  "judged": 150,
+  "blank": 0,
+  "invalid": 0,
+  "keyword_wins": 114,
+  "baseline_wins": 0,
+  "same": 7,
+  "both_bad": 29,
+  "keyword_net_win_rate": 0.76
+}
