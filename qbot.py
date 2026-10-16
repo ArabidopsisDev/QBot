@@ -18,6 +18,7 @@ from generation_refine import (GeneratedPath, MAX_CANDIDATES, natural_stop,
     structural_issue, validate_refine_probability, weighted_pick)
 from repetition import strong_repeat_repair
 from intelligence import Intelligence
+from keyword_reply import Bounds as KeywordBounds, Contexts as KeywordContexts, KeywordGenerator
 from moderation import ESCALATION_WINDOW, classify as classify_sexual, grade_reason, human_duration
 from quality import QualityLedger, ban_grade, length_gate
 from gates import GateHistory, default_config as gate_default_config, evaluate as evaluate_gates, normalize_event as gate_normalize_event, record_for as gate_record_for
@@ -63,6 +64,17 @@ APPLY_WINDOW = 86400        # One successful grant per account per day.
 VIOLATION_WINDOW = 86400    # An automatic ban blocks applications for a day.
 APPLY_QUIET = 60            # Repeat attempts inside this window are ignored silently.
 EXPIRY_NOTICE = '白名单资格已到期，已移出白名单。'
+# Keyword-seeded generate replies (keyword_reply.py). The in-memory model is
+# rebuilt from chars + intel_memory at most this often; every reply is still
+# re-checked against the current chars and pair bans before it is returned.
+KEYWORD_REFRESH = 60.0
+
+
+def keyword_probability(value):
+    """Validate a group's share of generate replies taken by the keyword path."""
+    if type(value) not in (int, float) or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError('keyword_reply_probability 必须是 0.0–1.0 之间的有限数值')
+    return float(value)
 
 
 def identifier(value):
@@ -192,6 +204,7 @@ class Bot:
     def __init__(self, database=":memory:", *, self_id, group_id=TEST_GROUP, rng=None,
                  clock=time.time, pre_root=PRE_ROOT, generate_blend_max=0.0,
                  generate_refine_probability=0.0, refine_rng=None,
+                 keyword_reply_probability=0.0, keyword_rng=None,
                  quality=None):
         self.group_id = identifier(group_id)
         if self.group_id not in ALLOWED_GROUPS:
@@ -207,6 +220,10 @@ class Bot:
         self.generate_blend_max = blend_ceiling(generate_blend_max)
         self.generate_refine_probability=validate_refine_probability(generate_refine_probability)
         self.refine_rng=refine_rng if refine_rng is not None else random.Random()
+        self.keyword_reply_probability = keyword_probability(keyword_reply_probability)
+        self.keyword_rng = keyword_rng if keyword_rng is not None else random.Random()
+        self._keyword_model = None
+        self._keyword_built = None
         self.db = sqlite3.connect(database)
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS qa (
@@ -700,6 +717,35 @@ class Bot:
                 candidates.append(text)
         return self.refine_rng.choice(candidates) if candidates else first.text
 
+    def keyword_reply(self, text):
+        """A keyword-seeded reply to the whole message, or None (stay silent).
+
+        Unlike `generate`, the walk does not continue the message's last
+        character: it grows a sentence through an informative keyword of the
+        message (see keyword_reply.py). Its randomness comes only from
+        `keyword_rng`. The cached model may lag behind by KEYWORD_REFRESH
+        seconds, so the reply is dropped if any of its adjacent pairs is no
+        longer a stored `chars` edge -- deleted or cleared edges never leave.
+        """
+        now = self.clock()
+        if (self._keyword_model is None or self._keyword_built is None
+                or not 0 <= now - self._keyword_built < KEYWORD_REFRESH):
+            memories = self.db.execute(
+                'SELECT text, w FROM intel_memory ORDER BY id').fetchall()
+            self._keyword_model = KeywordGenerator(
+                self.db, bounds=KeywordBounds(memories), contexts=KeywordContexts(memories),
+                corpus=[text for text, _ in memories])
+            self._keyword_built = now
+        found = self._keyword_model.reply(text, self.keyword_rng)
+        if found is None:
+            return None
+        pairs = list(zip(found.text, found.text[1:]))
+        for first, second in pairs:
+            if not self.db.execute('SELECT 1 FROM chars WHERE first=? AND second=?',
+                                   (first, second)).fetchone():
+                return None
+        return found.text
+
     def _generate_path(self, seed, *, rng=None):
         """Walk the transition graph from the tail of the message.
 
@@ -958,9 +1004,16 @@ class Bot:
                 answer = self.pick(self.db.execute(
                     'SELECT a,w FROM qa WHERE q=? ORDER BY a', (text,)).fetchall())
             elif self.model == 'generate':
-                # The last two characters seed the walk and its trigram blend;
-                # only the last one can appear as the walk's starting node.
-                answer = self.generate(text[-2:])
+                # A configured share of replies answers the whole message
+                # through a keyword instead of continuing its tail. At 0.0 the
+                # keyword RNG is never touched and generate is unchanged.
+                if (self.keyword_reply_probability > 0
+                        and self.keyword_rng.random() < self.keyword_reply_probability):
+                    answer = self.keyword_reply(text)
+                else:
+                    # The last two characters seed the walk and its trigram
+                    # blend; only the last one can be the walk's starting node.
+                    answer = self.generate(text[-2:])
             else:
                 answer = self.intelligence.reply(text)
         if answer and self.breaking_pair(answer) is not None:
