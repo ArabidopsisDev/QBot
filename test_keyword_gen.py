@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 import keyword_gen
-from keyword_gen import Bounds, KeywordGenerator
+from keyword_gen import END, START, Bounds, Contexts, KeywordGenerator
 from qbot import Bot
 
 CORPUS = ['今天考试好难啊。', '数学考试我也没复习！', '考试结束去吃火锅吧', '火锅好吃吗？',
@@ -111,6 +111,72 @@ class KeywordGenTests(unittest.TestCase):
         self.assertEqual(keyword_gen.longest_copy('龘', '甲乙'), 0)
 
 
+class ContextTests(unittest.TestCase):
+    def generator(self, texts, chars_texts=None, **kwargs):
+        bot = model(chars_texts or texts)
+        self.addCleanup(bot.close)
+        sentences = [(t, 1) for t in texts]
+        return KeywordGenerator(bot.db, bounds=Bounds(sentences),
+                                contexts=Contexts(sentences, 3), **kwargs)
+
+    def test_contexts_count_distinct_messages_with_boundaries(self):
+        contexts = Contexts([('甲乙丙', 5), ('甲乙丙', 1), ('丁甲乙丁', 1)], 3)
+        self.assertEqual(contexts.forward['甲乙'], {'丙': 1, '丁': 1})
+        self.assertEqual(contexts.forward['乙丙'], {END: 1})
+        self.assertEqual(contexts.backward['甲乙'], {START: 1, '丁': 1})
+        self.assertEqual(contexts.forward['丁甲乙'], {'丁': 1})
+
+    def test_witten_bell_mixes_supported_contexts_only(self):
+        texts = ['甲乙丙', '甲乙丙', '戊乙丁']
+        gen = self.generator(texts, min_support=2)
+        base = gen._base('乙', True)
+        self.assertAlmostEqual(base['丙'], (1 - gen.bounds.p_end('乙')) * 2 / 3)
+        mixed = gen.distribution('甲乙', True)
+        # 甲乙 seen in 2 distinct messages... but identical texts count once.
+        self.assertEqual(mixed, base)
+        gen = self.generator(['甲乙丙', '甲乙丙。', '戊乙丁'], min_support=2)
+        base = gen._base('乙', True)
+        mixed = gen.distribution('甲乙', True)
+        self.assertAlmostEqual(mixed['丙'], (2 + 1 * base['丙']) / (2 + 1))
+        self.assertAlmostEqual(mixed['丁'], base['丁'] / 3)
+        self.assertAlmostEqual(sum(mixed.values()), 1.0)
+
+    def test_long_contexts_never_revive_unlearned_or_deleted_pairs(self):
+        sentences = ['甲乙丙丁', '甲乙丙丁', '甲乙丙戊']
+        gen = self.generator(sentences * 2, chars_texts=['甲乙丙戊', '乙丙'])
+        dist = gen.distribution('乙丙', True)
+        self.assertNotIn('丁', dist)
+        self.assertAlmostEqual(sum(dist.values()), 1.0)
+
+    def test_round_two_replies_use_learned_edges_and_prefer_complete(self):
+        gen = self.generator(CORPUS * 2)
+        rng = random.Random(7)
+        produced = 0
+        for prompt in ('今天考试好难', '想吃火锅', '数学怎么复习'):
+            for _ in range(10):
+                found = gen.reply(prompt, rng)
+                if found is None:
+                    continue
+                produced += 1
+                self.assertIn(found.seed, found.text)
+                self.assertNotIn(END, found.text)
+                self.assertNotIn(START, found.text)
+                for pair in zip(found.text, found.text[1:]):
+                    self.assertIn(pair, gen.edges)
+        self.assertGreater(produced, 0)
+
+    def test_round_two_respects_pair_bans(self):
+        bot = model(CORPUS * 2, bans=[('火', '锅')])
+        self.addCleanup(bot.close)
+        sentences = [(t, 1) for t in CORPUS * 2]
+        gen = KeywordGenerator(bot.db, bounds=Bounds(sentences), contexts=Contexts(sentences))
+        rng = random.Random(5)
+        for _ in range(60):
+            found = gen.reply('火锅好吃', rng)
+            if found:
+                self.assertNotIn('火锅', found.text)
+
+
 class HarnessTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -144,7 +210,7 @@ class HarnessTests(unittest.TestCase):
         args = argparse.Namespace(out=str(out), export=export, db=None, holdout=.25,
                                   exclude=[], prompts=50, prompts_file=None, seed=1,
                                   attempts=16, blend=0.0, refine=.30, group='312579123',
-                                  heuristic_bounds=False)
+                                  heuristic_bounds=False, order=3, min_support=2)
         keyword_gen.compare(args)
         self.assertEqual(export.read_bytes(), before)
         metrics = json.loads((out / 'metrics.json').read_text(encoding='utf-8'))
@@ -158,6 +224,10 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(len(rows), 11)
         key = json.loads((out / 'answer_key.json').read_text(encoding='utf-8'))
         self.assertEqual(sorted(key['0']), ['baseline', 'keyword'])
+        self.assertIn('complete_rate', metrics['keyword'])
+        self.assertIn('keyword_v1', metrics)
+        v1 = json.loads((out / 'answer_key_v1.json').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(v1['0']), ['keyword', 'keyword_v1'])
         blind = (out / 'blind_pairs.tsv').read_text(encoding='utf-8')
         self.assertNotIn('keyword', blind.split('\n', 1)[1])
         self.assertNotIn('欢迎新人', (out / 'compare.tsv').read_text(encoding='utf-8'))

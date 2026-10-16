@@ -1,0 +1,12 @@
+{
+  "opponent": "keyword_v1",
+  "pairs": 150,
+  "judged": 150,
+  "blank": 0,
+  "invalid": 0,
+  "keyword_wins": 78,
+  "keyword_v1_wins": 9,
+  "same": 26,
+  "both_bad": 37,
+  "keyword_net_win_rate": 0.46
+}
