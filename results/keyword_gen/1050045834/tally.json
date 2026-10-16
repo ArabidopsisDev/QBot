@@ -1,0 +1,11 @@
+{
+  "pairs": 200,
+  "judged": 60,
+  "blank": 140,
+  "invalid": 0,
+  "keyword_wins": 22,
+  "baseline_wins": 21,
+  "same": 2,
+  "both_bad": 15,
+  "keyword_net_win_rate": 0.0167
+}
