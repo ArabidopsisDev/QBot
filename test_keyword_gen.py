@@ -9,7 +9,8 @@ import unittest
 from pathlib import Path
 
 import keyword_gen
-from keyword_gen import END, START, Bounds, Contexts, KeywordGenerator
+import keyword_reply
+from keyword_reply import END, START, Bounds, Contexts, KeywordGenerator
 from qbot import Bot
 
 CORPUS = ['今天考试好难啊。', '数学考试我也没复习！', '考试结束去吃火锅吧', '火锅好吃吗？',
@@ -47,8 +48,8 @@ class KeywordGenTests(unittest.TestCase):
                 self.assertTrue(set(found.seed) <= set(prompt))
                 for pair in zip(found.text, found.text[1:]):
                     self.assertIn(pair, gen.edges)
-                self.assertLessEqual(len(found.text), keyword_gen.MAX_REPLY)
-                self.assertGreaterEqual(len(found.text), keyword_gen.MIN_REPLY)
+                self.assertLessEqual(len(found.text), keyword_reply.MAX_REPLY)
+                self.assertGreaterEqual(len(found.text), keyword_reply.MIN_REPLY)
         self.assertGreater(produced, 0)
 
     def test_keywords_skip_punctuation_function_words_and_unknown_letters(self):
@@ -107,8 +108,8 @@ class KeywordGenTests(unittest.TestCase):
                 self.assertNotIn('好的。考', text)
 
     def test_longest_copy(self):
-        self.assertEqual(keyword_gen.longest_copy('今天考试', '昨天考试\x00今天下雨'), 3)
-        self.assertEqual(keyword_gen.longest_copy('龘', '甲乙'), 0)
+        self.assertEqual(keyword_reply.longest_copy('今天考试', '昨天考试\x00今天下雨'), 3)
+        self.assertEqual(keyword_reply.longest_copy('龘', '甲乙'), 0)
 
 
 class ContextTests(unittest.TestCase):

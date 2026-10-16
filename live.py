@@ -26,6 +26,9 @@ API_URL = 'http://127.0.0.1:5701/send_group_msg'
 MAX_EVENT_BYTES = 262144
 MIN_SEND_INTERVAL = 5.0
 GENERATE_REFINE_PROBABILITY = .30
+# Share of generate-mode replies answered by keyword_reply.py instead of
+# continuing the message tail. Enabled for the third group only.
+KEYWORD_REPLY_PROBABILITY = {THIRD_GROUP: .30}
 AUTO_LOOP_CLEAN_INTERVAL = 300.0
 # Restart announcements are switched off: the group asked not to receive update
 # notices. `broadcast_restart` is kept (and unit tested) so the behaviour can be
@@ -472,7 +475,9 @@ def main():
     bots = {
         group: Bot(str(ROOT / 'data' / filename), self_id=config['self_id'],
                    group_id=group, generate_blend_max=blend[group],
-                   generate_refine_probability=GENERATE_REFINE_PROBABILITY,quality=quality)
+                   generate_refine_probability=GENERATE_REFINE_PROBABILITY,
+                   keyword_reply_probability=KEYWORD_REPLY_PROBABILITY.get(group, 0.0),
+                   quality=quality)
         for group, filename in GROUP_DATABASES.items()
     }
     for bot in bots.values():
@@ -485,6 +490,8 @@ def main():
     log('QBot ready: test 312579123, production 1050045834, third 1006808801, fourth 929618496; all other destinations blocked.', flush=True)
     log(f'Global send interval: {MIN_SEND_INTERVAL:g} seconds; suppressed replies are not queued.', flush=True)
     log('Generate refinement: 30% branch, prefix-only stopping and at most 3 paths.',flush=True)
+    log('Keyword replies: ' + (', '.join(f'{g} {p:.0%}' for g, p in
+        sorted(KEYWORD_REPLY_PROBABILITY.items())) or 'off') + ' of generate replies.', flush=True)
     if ANNOUNCE_RESTART:
         threading.Thread(target=broadcast_restart, args=(sender, bots), daemon=True).start()
     threading.Thread(target=watch_expiry, args=(sender,), daemon=True).start()
