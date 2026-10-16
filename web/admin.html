@@ -1,0 +1,4511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 内联 favicon：不请求任何外部资源，同时避免浏览器产生 404 控制台噪音 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23ffffff'/%3E%3Crect x='2' y='9' width='3' height='5' fill='%23440154'/%3E%3Crect x='6.5' y='5' width='3' height='9' fill='%2321918c'/%3E%3Crect x='11' y='2' width='3' height='12' fill='%23fde725'/%3E%3C/svg%3E">
+<title>QBot 管理后台</title>
+<!--
+  QBot 本地管理后台 —— 单文件、零外部依赖、完全离线可用。
+  只使用原生 HTML/CSS/JavaScript 与 Canvas 2D，所有图形自行绘制。
+  视觉规范：科研论文插图风格（Science / Nature）
+    · 白底黑字，连续量一律 viridis 感知均匀色标，分类量用 Okabe-Ito 色盲友好配色
+    · 坐标轴 1px #333，去掉上/右边框，刻度线统一朝外，网格线极浅虚线
+    · 重绘全部支持 devicePixelRatio 高清屏缩放
+-->
+<style>
+:root{
+  --ink:#111;
+  --muted:#666;
+  --hair:#d9d9d9;
+  --hair-soft:#eee;
+  --err:#c0392b;
+  --ok:#2b7a2b;
+  --ink-soft:#333;
+  --blue:#0072b2;
+  --orange:#d55e00;
+  --green:#009e73;
+  --purple:#5b3a8e;
+  --magenta:#cc79a7;
+  --sky:#56b4e9;
+  --axis:#333;
+  /* viridis 主色阶 */
+  --v0:#440154; --v1:#3b528b; --v2:#21918c; --v3:#5ec962; --v4:#fde725;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:#fff;
+  color:var(--ink);
+  font:13px/1.6 "Helvetica Neue",Arial,"Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+/* 论文式数字排版 */
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:"Cascadia Mono",Consolas,"Courier New",monospace}
+
+/* ---------------------------------------------------------------- 顶部导航 */
+header.topbar{
+  position:sticky;top:0;z-index:50;
+  background:#fff;
+  border-bottom:1px solid var(--ink);
+  display:flex;align-items:flex-end;gap:22px;
+  padding:10px 22px 0 22px;
+  flex-wrap:wrap;
+}
+.brand{display:flex;align-items:baseline;gap:9px;padding-bottom:8px}
+.brand b{font-size:14px;font-weight:600;letter-spacing:.02em}
+.brand span{font-size:11.5px;color:var(--muted);letter-spacing:.05em}
+nav.tabs{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
+nav.tabs button{
+  appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+  font:inherit;font-size:13px;color:var(--muted);
+  padding:0 1px 8px 1px;cursor:pointer;
+}
+nav.tabs button:hover{color:var(--ink)}
+nav.tabs button.on{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
+
+main{max-width:1560px;margin:0 auto;padding:18px 24px 64px 24px}
+.foot{max-width:1560px;margin:0 auto;padding:0 24px 40px 24px;color:var(--muted);font-size:11.5px}
+
+/* ------------------------------------------------------------------ 提示条 */
+.banner{
+  border:1px solid var(--hair);border-left:3px solid var(--ink);
+  padding:6px 10px;font-size:12px;margin:0 0 14px 0;background:#fff;
+}
+.banner.error{border-color:var(--err);border-left-color:var(--err);color:var(--err)}
+.banner.ok{border-color:var(--ok);border-left-color:var(--ok);color:var(--ok)}
+.banner.warn{border-color:#b8860b;border-left-color:#b8860b;color:#8a6508}
+.banner .head{font-weight:600}
+pre.report{margin:5px 0 0 0;font-size:11.5px;white-space:pre-wrap;word-break:break-all;color:inherit}
+
+/* ================================================================== 栅格系统
+   现代后台式卡片网格：宽屏 3 列 / 中屏 2 列 / 窄屏 1 列，统一 14px 间距。
+   卡片内部是「小标题 + 图/表」，不再使用 A/B/C 编号式纵向堆叠。 */
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(340px, 1fr));
+  gap:14px;
+  align-items:start;
+  margin:0 0 14px 0;
+}
+.grid.one{grid-template-columns:minmax(0, 1fr)}
+.grid.two{grid-template-columns:repeat(auto-fit, minmax(430px, 1fr))}
+.grid.three{grid-template-columns:repeat(auto-fit, minmax(340px, 1fr))}
+.grid.four{grid-template-columns:repeat(auto-fit, minmax(260px, 1fr))}
+.grid.tight{gap:12px}
+/* 让某张卡片跨满整行 / 跨两列（表格与宽图用） */
+.span2{grid-column:span 2}
+.span-all{grid-column:1 / -1}
+@media (max-width:1040px){
+  .grid{grid-template-columns:repeat(auto-fit, minmax(300px, 1fr))}
+  .span2{grid-column:1 / -1}
+}
+
+/* -------------------------------------------------------------------- 卡片 */
+.card{
+  border:1px solid var(--hair);background:#fff;
+  padding:13px 15px 15px 15px;margin:0;
+  min-width:0;                     /* 允许在 grid 单元里收缩，避免 canvas 撑破 */
+}
+.grid > .card{height:100%}
+.card > h2{
+  font-size:12.5px;font-weight:500;margin:0 0 3px 0;letter-spacing:.01em;
+}
+.card > h2 .aux{font-weight:400;color:var(--muted);margin-left:7px;font-size:11.5px}
+.card > .sub{font-size:11.5px;color:var(--muted);margin:0 0 11px 0;line-height:1.55}
+.card > .sub b{color:var(--ink-soft);font-weight:600}
+.card > .sub:last-child{margin-bottom:0}
+.card.dense{padding:11px 13px 12px 13px}
+.card-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.card-head .grow{flex:1 1 180px;min-width:0}
+.card-head > h2, .card-head h2{font-size:12.5px;font-weight:500;margin:0;letter-spacing:.01em}
+.card-head .sub{margin:4px 0 0 0}
+.section-title{font-size:12px;font-weight:500;color:var(--muted);margin:0 0 9px 0;letter-spacing:.01em}
+
+/* --------------------------------------------------- 指标条（紧凑 chip 行） */
+.chips{
+  display:flex;flex-wrap:wrap;gap:0 26px;align-items:flex-end;
+  border:1px solid var(--hair);padding:10px 16px 12px 16px;margin:0 0 14px 0;
+}
+.chip{display:flex;flex-direction:column;gap:1px;padding:3px 0;min-width:0}
+.chip .k{font-size:11px;color:var(--muted);letter-spacing:.01em}
+.chip .v{
+  font-size:19px;font-weight:600;line-height:1.2;
+  font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:3px;
+}
+.chip .u{font-size:11px;color:var(--muted);font-weight:400}
+.chip.sm .v{font-size:15.5px}
+/* 卡片内的紧凑指标块（2 列小网格） */
+.mini-chips{
+  display:grid;grid-template-columns:repeat(auto-fit, minmax(118px, 1fr));
+  gap:8px 18px;margin:0 0 12px 0;
+}
+.mini-chips .chip{border:0;padding:0}
+.mini-chips .chip .v{font-size:16px}
+
+/* ------------------------------------------------------------------ 表格 */
+table{border-collapse:collapse;width:100%;font-size:12px}
+caption{caption-side:top;text-align:left;font-size:11.5px;color:var(--muted);padding:0 0 5px 0}
+th{
+  text-align:left;font-weight:600;font-size:11px;color:var(--ink);
+  border-bottom:1px solid var(--axis);padding:5px 8px 5px 0;white-space:nowrap;
+}
+td{border-bottom:1px solid var(--hair-soft);padding:4px 8px 4px 0;vertical-align:top}
+tbody tr:hover td{background:#fcfcfc}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+.scroll{max-height:380px;overflow:auto}
+.scroll.tall{max-height:520px}
+.muted{color:var(--muted)}
+.empty{color:var(--muted);font-size:12px;padding:8px 0}
+.tag{
+  display:inline-block;border:1px solid var(--hair);padding:0 5px;margin:0 4px 3px 0;
+  font-size:11.5px;line-height:17px;white-space:nowrap;
+}
+.tag.g{border-color:var(--ink-soft);color:var(--ink-soft)}
+.z-hi{color:var(--orange);font-weight:600}
+.z-lo{color:var(--blue);font-weight:600}
+
+/* 可点击下钻的行：hover 高亮 + 手型指针 */
+tr.rowlink{cursor:pointer}
+tr.rowlink:hover td{background:#f2f6f8}
+tr.rowlink:hover td:first-child{box-shadow:inset 2px 0 0 var(--ink)}
+tr.rowlink.on td{background:#eef4f6}
+tr.rowlink.on td:first-child{box-shadow:inset 2px 0 0 var(--v2)}
+tr.rowlink:focus{outline:none}
+tr.rowlink:focus td{background:#eef4f6}
+td.drillcell::after{content:'⌄';color:var(--muted);margin-left:5px}
+tr.rowlink:hover td.drillcell::after{color:var(--ink)}
+canvas.hoverable{cursor:pointer}
+
+/* 作用域与归属覆盖率 */
+.scope-tag{
+  display:inline-block;border:1px solid var(--ink);padding:1px 8px;font-size:11.5px;
+  font-weight:600;letter-spacing:.01em;
+}
+.scope-tag.all{border-color:var(--hair);font-weight:400;color:var(--muted)}
+.pair-title{font-size:19px;font-weight:600;letter-spacing:.01em;line-height:1.35}
+.pair-title .arrow{color:var(--muted);font-weight:400;margin:0 6px}
+.pair-title .sep{margin:0 6px;color:var(--hair)}
+.pair-title .u{font-size:12px;font-weight:400;color:var(--muted);margin-left:10px}
+.pair-head{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:2px}
+.pair-head .grow{flex:1 1 240px;min-width:0}
+
+/* -------------------------------------------------------------- 表单控件 */
+.toolbar{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.field{display:flex;flex-direction:column;gap:3px}
+.field > label{font-size:11px;color:var(--muted)}
+input[type=text],input[type=number],select,textarea{
+  font:inherit;font-size:12.5px;color:var(--ink);background:#fff;
+  border:1px solid var(--hair);border-radius:0;padding:4px 6px;min-width:0;
+}
+input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--ink);
+}
+input.c1{width:52px;text-align:center;font-size:15px}
+input.w120{width:120px}
+input.w90{width:90px}
+input.w160{width:160px}
+textarea{width:320px;height:56px;resize:vertical}
+select{min-width:230px}
+button.btn{
+  appearance:none;font:inherit;font-size:12.5px;cursor:pointer;
+  background:#fff;color:var(--ink);border:1px solid var(--ink-soft);border-radius:0;
+  padding:4px 12px;
+}
+button.btn:hover{background:#f4f4f4}
+button.btn:active{background:#e9e9e9}
+button.btn.sm{font-size:11.5px;padding:2px 8px;border-color:var(--hair)}
+button.btn.sm:hover{border-color:var(--ink)}
+button.btn.danger{border-color:var(--err);color:var(--err)}
+button.btn.danger:hover{background:#fdf3f2}
+button.btn:disabled{opacity:.45;cursor:default}
+.hint{font-size:11.5px;color:var(--muted);line-height:1.5}
+.hint b{color:var(--ink-soft);font-weight:600}
+
+/* 分段控件（模型切换 / 子标签） */
+.seg{display:inline-flex;border:1px solid var(--hair)}
+.seg button{
+  appearance:none;font:inherit;font-size:11.5px;cursor:pointer;background:#fff;
+  color:var(--muted);border:0;border-right:1px solid var(--hair);padding:3px 11px;
+}
+.seg button:last-child{border-right:0}
+.seg button:hover{color:var(--ink);background:#f7f7f7}
+.seg button.on{background:var(--ink);color:#fff;font-weight:600}
+.seg.lg button{font-size:12.5px;padding:5px 16px}
+
+/* 单选组 */
+.radios{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12.5px}
+.radios label{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+input[type=radio],input[type=checkbox]{accent-color:var(--ink);margin:0}
+
+/* 色标图例 */
+.cbar{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:var(--muted)}
+.cbar .strip{
+  height:9px;flex:1 1 auto;min-width:120px;max-width:420px;border:1px solid var(--hair);
+  background:linear-gradient(to right,var(--v0),var(--v1),var(--v2),var(--v3),var(--v4));
+}
+.legend-inline{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin:0 0 10px 0}
+.legend-inline i{display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:-1px}
+
+/* 网格布局 */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:1000px){.grid2{grid-template-columns:1fr}}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+@media (max-width:900px){.split{grid-template-columns:1fr}}
+
+/* 群体重条 */
+.dist{display:flex;height:11px;border:1px solid var(--hair);margin-top:6px}
+.dist span{display:block;min-width:0}
+.dist-label{font-size:11px;color:var(--muted);margin-top:4px;display:flex;gap:12px;flex-wrap:wrap}
+.dist-label i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:-1px}
+.src-pick{cursor:pointer}
+.src-pick:hover{border-color:var(--ink);background:#f7f7f7}
+
+/* 日志 */
+pre.log{
+  font-family:"Cascadia Mono",Consolas,"Courier New",monospace;font-size:11.5px;
+  line-height:1.5;background:#fff;border:1px solid var(--hair-soft);
+  padding:10px;margin:0;max-height:460px;overflow:auto;white-space:pre-wrap;word-break:break-all;
+}
+.hidden{display:none !important}
+.switch{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer}
+.chart-tip{position:fixed;left:0;top:0;pointer-events:none;z-index:9999;display:none;
+  background:#fff;border:1px solid #333;padding:5px 8px;white-space:pre;
+  font:12px/1.55 "Helvetica Neue",Arial,"Microsoft YaHei",sans-serif;color:#111;
+  box-shadow:0 2px 10px rgba(0,0,0,.14);max-width:320px}
+canvas[data-tip]{cursor:crosshair}
+/* 管理工作台：明确的层级、柔和卡片和紧凑移动端导航。图表色标保持原样。 */
+body{background:#f5f7f7;color:#17252a}
+header.topbar{align-items:center;padding:13px 24px 0;background:#fff;
+  border-bottom:1px solid #dce5e4;box-shadow:0 2px 14px rgba(25,55,50,.05)}
+.brand{flex-direction:column;align-items:flex-start;gap:0;padding-bottom:10px}
+.brand b{font-size:18px;letter-spacing:-.02em}
+.brand span{font-size:11px;letter-spacing:0}
+nav.tabs{gap:4px}
+nav.tabs button{padding:8px 12px 12px;border-radius:8px 8px 0 0;font-weight:500}
+nav.tabs button:hover{background:#f0f6f4}
+nav.tabs button.on{color:#166e62;border-bottom-color:#166e62;background:#edf7f4}
+main{padding-top:24px}
+.card,.chips{border:1px solid #e0e8e6;border-radius:12px;
+  box-shadow:0 3px 14px rgba(24,57,52,.035)}
+.card{padding:17px 19px 18px}
+.card > h2,.card-head h2{font-size:14px;font-weight:650}
+.chips{background:#fff}
+button.btn{border-radius:7px}
+input[type=text],input[type=number],select,textarea{border-radius:6px}
+input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{
+  border-color:#16806e;box-shadow:0 0 0 3px rgba(22,128,110,.12)}
+.page-intro{margin:0 0 18px}
+.page-intro h1{font-size:22px;line-height:1.2;margin:0 0 5px;font-weight:680;letter-spacing:-.025em}
+.page-intro p{font-size:12.5px;color:var(--muted);margin:0}
+.quality-score{font-size:32px;line-height:1.1;font-weight:700;color:#166e62}
+.quality-score small{font-size:13px;color:var(--muted);font-weight:400}
+.quality-form{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:12px}
+.quality-form .field{min-width:125px}
+.quality-form .field.reason{flex:1 1 220px}
+.quality-form .field.reason input{width:100%}
+.quality-form .field input[type=number]{width:100px}
+.quality-form .field input[type=text]{min-height:32px}
+.quality-row{cursor:pointer}
+.quality-row:hover td{background:#edf7f4}
+.review-layout{display:grid;grid-template-columns:minmax(250px,32%) minmax(0,1fr);gap:14px;margin:0 0 14px}
+.review-report{border:1px solid #cad7d4;background:#fff;padding:14px;min-width:0}
+.review-report h2{text-align:center;font-size:19px;margin:0 0 14px;letter-spacing:.07em}
+.report-pages{background:#ecefef;border:1px solid #dce5e4;padding:12px;
+  display:flex;flex-direction:column;align-items:center;gap:12px;max-height:1100px;overflow:auto}
+.report-page{display:block;width:100%;max-width:800px;height:auto;background:#fff;
+  box-shadow:0 2px 9px rgba(0,0,0,.13)}
+.report-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 10px;flex-wrap:wrap}
+.report-editor{border-top:1px solid #dce5e4;margin-top:16px;padding:16px 6px 4px}
+.report-editor h3{font-family:"SimHei","Microsoft YaHei",sans-serif;font-size:15px;margin:0 0 10px}
+.review-section{border-top:1px solid #dce5e4;padding:11px 0}
+.review-section h3{font-size:12px;margin:0 0 6px;color:#55706b}
+.review-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 16px}
+.review-raw{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f9f8;padding:10px}
+.review-signature{max-width:180px;max-height:80px;object-fit:contain;vertical-align:middle}
+@media(max-width:820px){.review-layout{grid-template-columns:minmax(0,1fr)}
+  .review-meta{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:720px){
+  header.topbar{padding:10px 12px 0;gap:4px}
+  nav.tabs{margin-left:0;width:100%;overflow-x:auto;flex-wrap:nowrap}
+  nav.tabs button{white-space:nowrap;font-size:12px;padding:8px 9px 10px}
+  main{padding:16px 12px 40px}
+  .grid,.grid.two,.grid.three{grid-template-columns:minmax(0,1fr)}
+  .card{padding:14px}
+  .foot{padding:0 12px 28px}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><b>QBot 管理后台</b><span>本地 · 仅 127.0.0.1 · 无鉴权</span></div>
+  <nav class="tabs" id="tabs">
+    <button type="button" data-page="overview">数据大屏</button>
+    <button type="button" data-page="bans">封禁管理</button>
+    <button type="button" data-page="train">训练管理</button>
+    <button type="button" data-page="dict">门禁管理</button>
+    <button type="button" data-page="quality">用户质量分</button>
+    <button type="button" data-page="system">系统</button>
+  </nav>
+</header>
+
+<main id="view"></main>
+<div class="foot" id="foot"></div>
+
+<script>
+'use strict';
+(function () {
+/* =========================================================================
+ * 0. 全局状态
+ * ====================================================================== */
+var PAGES = ['overview', 'bans', 'train', 'dict', 'quality', 'system'];
+var PAGE_TITLES = {
+  overview: '数据大屏', bans: '封禁管理', train: '训练管理',
+  dict: '门禁管理', quality: '用户质量分', system: '系统'
+};
+var MODEL_LABELS = { match: 'match', generate: 'generate', intelligence: 'intelligence' };
+var MODEL_COLORS = { match: '#0072B2', generate: '#009E73', intelligence: '#CC79A7' };
+
+var state = {
+  page: 'overview',
+  group: null,              // 当前选中群（封禁 / 训练页）
+  auto: true,               // 自动刷新开关
+  lastRefresh: 0,
+  trainTab: 'match',        // 训练页子标签
+  genUser: null,            // generate 作用域：null = 全部数据，否则为某个 QQ 号
+  pair: null,               // 已展开的转移详情 key：{first, second}
+  qualityUser: null,
+  gateReport: null,
+  gateStatus: 'pending'
+};
+var cache = {
+  overview: null, bans: null, match: null, generate: null, generateUsers: null,
+  pairDetail: null, explore: null, sources: null, dict: null, quality: null,
+  qualityDetail: null, gateReports: null, gateReportDetail: null,
+  gatePageInfo: null,
+  system: null, log: null
+};
+var jobs = {};              // 按钮忙碌状态：key -> true
+var GLOBAL_ERROR = '';
+
+/* 默认关闭：自动刷新会重建页面 DOM，把用户填写的表单和已加载的图表刷走。 */
+try { state.auto = localStorage.getItem('qbot.auto') === '1'; } catch (e) { /* 隐私模式：保持默认（关闭） */ }
+
+/* =========================================================================
+ * 1. 小工具：格式化 / 转义 / 数值安全
+ * ====================================================================== */
+var DASH = '—';
+
+function isNum(v) { return typeof v === 'number' && isFinite(v); }
+
+/** 安全取数值，非数字一律返回 fallback，避免 NaN/undefined 上屏。 */
+function num(v, fallback) {
+  if (isNum(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v))) return Number(v);
+  return fallback === undefined ? 0 : fallback;
+}
+
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+/** 千分位整数：12345 → 12,345 */
+function fmtInt(v) {
+  if (!isNum(v)) return DASH;
+  return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** 定点小数并去掉无意义的尾随零：46.00 → 46、0.0158 → 0.0158 */
+function fmtNum(v, digits) {
+  var d = digits === undefined ? 1 : digits;
+  if (!isNum(v)) return DASH;
+  if (v !== 0 && Math.abs(v) < Math.pow(10, -d) / 2) return '0';
+  var s = v.toFixed(d);
+  if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
+  return s;
+}
+
+/** 紧凑计数：大数值用万/亿，图表刻度用 */
+function fmtCompact(v) {
+  if (!isNum(v)) return DASH;
+  var a = Math.abs(v);
+  if (a >= 1e8) return fmtNum(v / 1e8, 2) + '亿';
+  if (a >= 1e4) return fmtNum(v / 1e4, 2) + '万';
+  return fmtInt(v);
+}
+
+/** 占比：0.0158 → 1.58% */
+function fmtPct(v, digits) {
+  if (!isNum(v)) return DASH;
+  return fmtNum(v * 100, digits === undefined ? 2 : digits) + '%';
+}
+
+function fmtBytes(v) {
+  if (!isNum(v)) return DASH;
+  if (v < 1024) return fmtInt(v) + ' B';
+  if (v < 1024 * 1024) return fmtNum(v / 1024, 1) + ' KB';
+  if (v < 1024 * 1024 * 1024) return fmtNum(v / 1048576, 1) + ' MB';
+  return fmtNum(v / 1073741824, 2) + ' GB';
+}
+
+function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+
+function fmtTime(ts) {
+  if (!isNum(ts) || ts <= 0) return DASH;
+  var d = new Date(ts * 1000);
+  if (isNaN(d.getTime())) return DASH;
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' +
+    pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+}
+
+/** 秒 → 「x天x小时x分」，零段自动省略 */
+function fmtDur(sec) {
+  var s = num(sec, 0);
+  if (!isNum(sec) || sec === null || sec === undefined) return DASH;
+  if (s <= 0) return '已到期';
+  s = Math.floor(s);
+  var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  var out = '';
+  if (d) out += d + ' 天';
+  if (h) out += h + ' 小时';
+  if (m) out += m + ' 分';
+  if (!out) out = (s % 60) + ' 秒';
+  return out;
+}
+
+/** 秒 → 中文时长（词库表用：「12 小时」） */
+function fmtDurLabel(sec) {
+  if (!isNum(sec)) return DASH;
+  if (sec >= 86400 && sec % 86400 === 0) return (sec / 86400) + ' 天';
+  if (sec >= 3600 && sec % 3600 === 0) return (sec / 3600) + ' 小时';
+  if (sec >= 60 && sec % 60 === 0) return (sec / 60) + ' 分钟';
+  return sec + ' 秒';
+}
+
+function text(v) {
+  if (v === null || v === undefined || v === '') return DASH;
+  return String(v);
+}
+
+function groupLabel(group) {
+  var g = findGroup(group);
+  return g && g.label ? g.label : String(group);
+}
+function findGroup(group) {
+  var list = (cache.overview && cache.overview.groups) || [];
+  for (var i = 0; i < list.length; i++) if (String(list[i].group) === String(group)) return list[i];
+  return null;
+}
+function groupShort(group) {
+  var g = findGroup(group);
+  var label = g && g.label ? g.label : String(group);
+  return label.split('·')[0].trim() || String(group);
+}
+function modelOf(group) {
+  var g = findGroup(group);
+  return (g && g.model) || '—';
+}
+function modelsList() {
+  var m = (cache.overview && cache.overview.models) || [];
+  return m.length ? m : ['match', 'generate', 'intelligence'];
+}
+
+/* =========================================================================
+ * 2. viridis 感知均匀色标 + Okabe-Ito 色盲友好配色
+ * ====================================================================== */
+var VIRIDIS = [
+  [0.000, 68, 1, 84], [0.063, 72, 26, 108], [0.125, 71, 47, 125],
+  [0.188, 65, 68, 135], [0.250, 59, 82, 139], [0.313, 49, 104, 142],
+  [0.375, 38, 130, 142], [0.438, 31, 158, 137], [0.500, 53, 183, 121],
+  [0.563, 109, 205, 89], [0.625, 180, 222, 44], [0.688, 253, 231, 37]
+];
+var OKABE_ITO = ['#0072B2', '#D55E00', '#009E73', '#CC79A7', '#E69F00', '#56B4E9', '#F0E442'];
+var IN_COLOR = '#D55E00';     // 前驱 / 入边（暖）
+var OUT_COLOR = '#0072B2';    // 后继 / 出边（冷）
+var DARK_TEXT = '#0d0d0d';
+
+/** 归一化位置 → viridis RGB 三元组 */
+function viridisRGB(t) {
+  var x = num(t, 0);
+  if (!isFinite(x)) x = 0;
+  if (x < 0) x = 0;
+  if (x > 1) x = 1;
+  for (var i = 1; i < VIRIDIS.length; i++) {
+    if (x <= VIRIDIS[i][0] || i === VIRIDIS.length - 1) {
+      var a = VIRIDIS[i - 1], b = VIRIDIS[i];
+      var span = b[0] - a[0];
+      var f = span > 1e-9 ? (x - a[0]) / span : 0;
+      if (f < 0) f = 0; if (f > 1) f = 1;
+      return [
+        Math.round(a[1] + (b[1] - a[1]) * f),
+        Math.round(a[2] + (b[2] - a[2]) * f),
+        Math.round(a[3] + (b[3] - a[3]) * f)
+      ];
+    }
+  }
+  return [68, 1, 84];
+}
+function viridisCss(t, alpha) {
+  var c = viridisRGB(t);
+  if (alpha !== undefined && alpha < 1) return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha + ')';
+  return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+}
+/** 任意数值 → viridis 颜色（线性拉伸到 min..max） */
+function vmap(v, min, max, alpha) {
+  var lo = num(min, 0), hi = num(max, 1), x = num(v, 0);
+  var t = (hi - lo) < 1e-12 ? 0.5 : (x - lo) / (hi - lo);
+  return viridisCss(t, alpha);
+}
+/** 相对亮度，用于决定单元格文字取黑还是白 */
+function luminance(rgb) {
+  return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+}
+function textOn(rgb) { return luminance(rgb) > 0.55 ? DARK_TEXT : '#ffffff'; }
+function hexToRgb(hex) {
+  var h = String(hex).replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+function mixRgb(a, b, f) {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * f),
+    Math.round(a[1] + (b[1] - a[1]) * f),
+    Math.round(a[2] + (b[2] - a[2]) * f)
+  ];
+}
+function rgbCss(c) { return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')'; }
+
+/* =========================================================================
+ * 3. Canvas 绘图基建（高清屏 / 坐标轴 / 文本）
+ * ====================================================================== */
+var FONT = '"Helvetica Neue",Arial,"Microsoft YaHei",sans-serif';
+var AXIS = '#333';
+var GRID = '#eee';
+var HAIR = '#d9d9d9';
+var MUTED = '#666';
+var INK = '#111';
+
+function axisFont(px) { return px + 'px ' + FONT; }
+function tickFont(px) { return (px || 11) + 'px ' + FONT; }
+function labelFont(px) { return (px || 11.5) + 'px ' + FONT; }
+function boldFont(px) { return '600 ' + (px || 12) + 'px ' + FONT; }
+
+/** 按 CSS 尺寸与 devicePixelRatio 重置画布，返回已缩放的 2D 上下文。 */
+function fit(canvas, wFallback, hFallback) {
+  if (!canvas) return null;
+  var rect = canvas.getBoundingClientRect();
+  var w = Math.max(1, Math.round(rect.width || wFallback || 600));
+  var h = Math.max(1, Math.round(rect.height || hFallback || 240));
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  var ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  return { ctx: ctx, w: w, h: h, dpr: dpr };
+}
+
+/** 空数据提示：不画坐标轴 */
+function emptyCanvas(canvas, message) {
+  var c = fit(canvas);
+  if (!c) return;
+  c.ctx.font = labelFont(12);
+  c.ctx.fillStyle = MUTED;
+  c.ctx.textAlign = 'center';
+  c.ctx.fillText(message || '暂无数据', c.w / 2, c.h / 2);
+  c.ctx.textAlign = 'left';
+}
+
+function measure(ctx, s, font) {
+  if (font) ctx.font = font;
+  return ctx.measureText(String(s)).width;
+}
+
+/** 截断过长文本并加省略号 */
+function ellipsize(ctx, s, maxWidth, font) {
+  var str = String(s === null || s === undefined ? '' : s);
+  if (font) ctx.font = font;
+  if (maxWidth <= 0) return '';
+  if (ctx.measureText(str).width <= maxWidth) return str;
+  var out = str;
+  while (out.length > 1 && ctx.measureText(out + '…').width > maxWidth) out = out.slice(0, -1);
+  return out + '…';
+}
+
+/** 横排：保持宽度，缩字号直到放下 */
+function fitTextH(ctx, s, maxWidth, basePx, fontBuilder, minPx) {
+  var px = basePx, make = fontBuilder || labelFont, min = minPx || 9;
+  while (px > min) {
+    if (measure(ctx, s, make(px)) <= maxWidth) return px;
+    px -= 0.5;
+  }
+  return min;
+}
+
+/** 「漂亮刻度」：返回 {min,max,step,ticks[]} */
+function niceScale(lo, hi, target) {
+  var t = target || 5;
+  if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+  if (hi <= lo) hi = lo + 1;
+  var raw = (hi - lo) / t;
+  var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+  var norm = raw / mag;
+  var step;
+  if (norm <= 1) step = 1; else if (norm <= 2) step = 2; else if (norm <= 2.5) step = 2.5;
+  else if (norm <= 5) step = 5; else step = 10;
+  step *= mag;
+  var min = Math.floor(lo / step) * step;
+  var max = Math.ceil(hi / step) * step;
+  if (max === min) max = min + step;
+  var ticks = [];
+  for (var v = min; v <= max + step * 1e-6 && ticks.length < 40; v += step) {
+    ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  }
+  return { min: min, max: max, step: step, ticks: ticks };
+}
+
+function tickText(v) {
+  if (!isNum(v)) return '';
+  if (Math.abs(v) >= 1e6 || (v !== 0 && Math.abs(v) < 0.001)) return fmtNum(v, 2);
+  var a = Math.abs(v);
+  var digits = a === 0 ? 0 : (a % 1 === 0 ? 0 : (a < 0.05 ? 3 : (a < 1 ? 2 : 1)));
+  return fmtNum(v, digits);
+}
+
+function withAlpha(ctx, alpha, fn) {
+  var old = ctx.globalAlpha;
+  ctx.globalAlpha = old * alpha;
+  fn();
+  ctx.globalAlpha = old;
+}
+
+/* -- 坐标轴：去掉上/右边框，刻度线统一朝外 ------------------------------- */
+function drawAxis(ctx, o) {
+  var L = o.left, T = o.top, R = o.right, B = o.bottom;
+  var labels = o.labels !== false;
+  var grid = o.grid === true;
+  var gridX = grid && o.gridX !== false;
+  var gridY = grid && o.gridY !== false;
+  var fY = tickFont(o.fontY || o.font || 11);
+  var fX = tickFont(o.fontX || o.font || 11);
+
+  ctx.save();
+  ctx.strokeStyle = AXIS;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(L, T);
+  ctx.lineTo(L, B);
+  ctx.lineTo(R, B);
+  ctx.stroke();
+
+  // 网格（回归图常见的极浅虚线，放在数据下面调用）
+  if (grid) {
+    ctx.save();
+    ctx.strokeStyle = GRID;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    if (gridY) for (var i = 0; i < o.yticks.length; i++) {
+      var gy = Math.round(o.ys(o.yticks[i])) + 0.5;
+      ctx.moveTo(L, gy); ctx.lineTo(R, gy);
+    }
+    if (gridX && o.xs) for (var j = 0; j < o.xticks.length; j++) {
+      var gx = Math.round(o.xs(o.xticks[j])) + 0.5;
+      ctx.moveTo(gx, T); ctx.lineTo(gx, B);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 刻度线（朝外）+ 刻度值
+  ctx.strokeStyle = AXIS;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  ctx.font = fY;
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (var a = 0; labels && a < o.yticks.length; a++) {
+    var y = Math.round(o.ys(o.yticks[a])) + 0.5;
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L - 4, y); ctx.stroke();
+    ctx.fillText(ellipsize(ctx, o.ytickLabel ? o.ytickLabel(o.yticks[a]) : tickText(o.yticks[a]),
+      L - 7, fY), L - 7, y);
+  }
+  ctx.font = fX;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (var b = 0; labels && o.xs && b < o.xticks.length; b++) {
+    var x = Math.round(o.xs(o.xticks[b])) + 0.5;
+    ctx.beginPath(); ctx.moveTo(x, B); ctx.lineTo(x, B + 4); ctx.stroke();
+    ctx.fillText(ellipsize(ctx, o.xtickLabel ? o.xtickLabel(o.xticks[b]) : tickText(o.xticks[b]),
+      (R - L) / Math.max(1, o.xticks.length) - 4, fX), x, B + 7);
+  }
+
+  // 轴标题（带单位）
+  ctx.font = labelFont(11.5);
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  if (o.xlabel) ctx.fillText(o.xlabel, (L + R) / 2, o.xLabelOffset || (labels ? B + 30 : B + 16));
+  if (o.ylabel) {
+    ctx.save();
+    ctx.translate(13, (T + B) / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(o.ylabel, 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawPanelLabel(ctx, letter, x, y, size) {
+  ctx.save();
+  ctx.font = '700 ' + (size || 13) + 'px ' + FONT;
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(letter, x === undefined ? 2 : x, y === undefined ? 0 : y);
+  ctx.restore();
+}
+
+/** 画布内联色标条 */
+function drawColorbar(ctx, x, y, w, h, loLabel, hiLabel, title) {
+  var g = ctx.createLinearGradient(x, y, x + w, y);
+  for (var i = 0; i <= 10; i++) g.addColorStop(i / 10, viridisCss(i / 10));
+  ctx.save();
+  ctx.fillStyle = g;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = HAIR;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.font = tickFont(10);
+  ctx.fillStyle = MUTED;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  if (title) ctx.fillText(title, x, y - 13);
+  ctx.fillText(loLabel, x, y + h + 3);
+  ctx.textAlign = 'right';
+  ctx.fillText(hiLabel, x + w, y + h + 3);
+  ctx.restore();
+}
+
+function drawNoData(ctx, x, y, w, h, message) {
+  ctx.save();
+  ctx.font = labelFont(12);
+  ctx.fillStyle = MUTED;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(message || '暂无数据', x + w / 2, y + h / 2);
+  ctx.restore();
+}
+
+/* =========================================================================
+ * 4. 图形：分组条形图 / 横条图 / 直方图 / 热力图 / 网络图
+ * ====================================================================== */
+
+/** 简单纵向条形图，可选按高度着色（value 本身作色） */
+function drawBarChart(canvas, opt) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  var rows = opt.rows || [];
+  var L = 58, R = c.w - 14, T = opt.panel ? 22 : 12, B = c.h - 40;
+  if (R - L < 40 || B - T < 30) return;
+  if (!rows.length) { drawNoData(ctx, L, T, R - L, B - T); return; }
+
+  var maxV = 0;
+  rows.forEach(function (r) { maxV = Math.max(maxV, num(r.value, 0)); });
+  var sc = niceScale(0, Math.max(maxV, 1), 5);
+  var ys = function (v) { return B - (num(v, 0) - sc.min) / (sc.max - sc.min) * (B - T); };
+
+  if (opt.panel) drawPanelLabel(ctx, opt.panel, 2, 2);
+
+  var slot = (R - L) / rows.length;
+  var bw = Math.min(64, slot * 0.62);
+  var geo = { left: L, right: R, top: T, bottom: B, ys: ys, yticks: sc.ticks };
+
+  // 网格先画
+  ctx.save();
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  sc.ticks.forEach(function (t) {
+    var y = Math.round(ys(t)) + 0.5;
+    ctx.moveTo(L, y); ctx.lineTo(R, y);
+  });
+  ctx.stroke();
+  ctx.restore();
+
+  rows.forEach(function (r, i) {
+    var v = num(r.value, 0);
+    var x = L + slot * i + (slot - bw) / 2;
+    var y = ys(v);
+    var h = Math.max(v > 0 ? 0.75 : 0, B - y);
+    ctx.fillStyle = opt.barColor ? opt.barColor(r, i) : '#3b528b';
+    ctx.fillRect(x, y, bw, h);
+    ctx.strokeStyle = AXIS; ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(bw) - 1, Math.max(h > 0.75 ? Math.round(h) : 1, 1));
+    // 条顶直接标数值
+    ctx.font = boldFont(11.5);
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(ellipsize(ctx, fmtInt(v), bw + 22, boldFont(11.5)), x + bw / 2, y - 3);
+    // 类别标签
+    ctx.font = tickFont(11);
+    ctx.fillStyle = INK;
+    ctx.textBaseline = 'top';
+    ctx.fillText(ellipsize(ctx, text(r.name), slot - 4, tickFont(11)), L + slot * i + slot / 2, B + 8);
+  });
+
+  drawAxis(ctx, {
+    left: L, right: R, top: T, bottom: B, ys: ys, yticks: sc.ticks,
+    grid: false, labels: true, ylabel: opt.yLabel, xLabelOffset: B + 27,
+    ytickLabel: opt.yTick
+  });
+  // 仅保留左轴与刻度，底部轴线由 drawAxis 负责
+  return geo;
+}
+
+/** 分组条形图：每个群一组，每组多个系列（各自按组内最大值归一化） */
+function drawGroupedBar(canvas, opts) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  var groups = opts.groups || [];
+  var series = opts.series || [];
+  var hasData = groups.some(function (g) {
+    return series.some(function (s) { return num(g.values[s.key], 0) > 0; });
+  });
+  var L = 58, R = c.w - 14, T = opts.panel ? 34 : 26, B = c.h - 44;
+  if (!groups.length || !series.length || !hasData) {
+    drawNoData(ctx, L, T, R - L, B - T);
+    return;
+  }
+  var sc = niceScale(0, 100, 5);
+  var ys = function (v) { return B - (num(v, 0) / sc.max) * (B - T); };
+
+  if (opts.panel) drawPanelLabel(ctx, opts.panel, 2, 2);
+
+  ctx.save();
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  sc.ticks.forEach(function (t) {
+    var y = Math.round(ys(t)) + 0.5;
+    ctx.moveTo(L, y); ctx.lineTo(R, y);
+  });
+  ctx.stroke();
+  ctx.restore();
+
+  var slot = (R - L) / groups.length;
+  var inner = slot * 0.72;
+  var bw = Math.max(4, Math.min(30, inner / series.length - 3));
+  var groupW = bw * series.length + 3 * (series.length - 1);
+
+  groups.forEach(function (g, gi) {
+    var vals = series.map(function (s) { return num(g.values[s.key], 0); });
+    var groupMax = Math.max.apply(null, vals.concat([1]));
+    var x0 = L + slot * gi + (slot - groupW) / 2;
+    series.forEach(function (s, si) {
+      var v = num(g.values[s.key], 0);
+      var rel = v / groupMax * 100;
+      var x = x0 + si * (bw + 3);
+      var y = ys(rel);
+      var h = Math.max(v > 0 ? 0.8 : 0, B - y);
+      ctx.fillStyle = s.color;
+      ctx.fillRect(x, y, bw, h);
+      ctx.strokeStyle = AXIS; ctx.lineWidth = 1;
+      if (v > 0) ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(bw) - 1, Math.round(h));
+    });
+    ctx.font = tickFont(11);
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(ellipsize(ctx, text(g.name), slot - 4, tickFont(11)), L + slot * gi + slot / 2, B + 8);
+  });
+
+  drawAxis(ctx, {
+    left: L, right: R, top: T, bottom: B, ys: ys, yticks: sc.ticks,
+    grid: false, labels: true, ylabel: opts.yLabel, xLabelOffset: B + 28,
+    ytickLabel: function (v) { return tickText(v); }
+  });
+
+  // 图例（简洁：色块 + 文字，右侧越界即截断）
+  var lx = L, ly = 8;
+  ctx.save();
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  series.forEach(function (s) {
+    var gap = 18;
+    var avail = R - lx - gap;
+    if (avail < 34) return;
+    var px = fitTextH(ctx, s.name, avail - 15, 11, tickFont, 9);
+    ctx.font = tickFont(px);
+    var tw = Math.min(measure(ctx, s.name, tickFont(px)), avail - 15);
+    ctx.fillStyle = s.color;
+    ctx.fillRect(lx, ly - 5, 10, 10);
+    ctx.strokeStyle = AXIS;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(lx + 0.5, ly - 4.5, 9, 9);
+    ctx.fillStyle = INK;
+    ctx.fillText(ellipsize(ctx, s.name, tw, tickFont(px)), lx + 15, ly);
+    lx += 15 + tw + gap;
+  });
+  ctx.restore();
+}
+
+/** 横条图：条尾标数值 */
+function drawBarChartH(canvas, opt) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  var rows = opt.rows || [];
+  if (!rows.length) {
+    drawNoData(ctx, 8, 8, c.w - 16, c.h - 16);
+    return;
+  }
+  if (opt.panel) drawPanelLabel(ctx, opt.panel, 2, 2);
+
+  var padL = opt.labelWidth || 150;
+  var padR = opt.valueWidth || 64;
+  var top = (opt.panel ? 24 : 8) + (opt.title ? 16 : 0);
+  var bottom = c.h - 26;
+  var L = padL, R = c.w - padR;
+  if (R - L < 30) { drawNoData(ctx, 8, 8, c.w - 16, c.h - 16); return; }
+  var maxV = 0;
+  rows.forEach(function (r) { maxV = Math.max(maxV, num(r.value, 0)); });
+  maxV = Math.max(maxV, 1);
+  var rowH = Math.max(9, (bottom - top) / rows.length);
+  var barH = Math.min(18, rowH * 0.7);
+
+  if (opt.title) {
+    ctx.save();
+    ctx.font = labelFont(11.5);
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(opt.title, 2, (opt.panel ? 20 : 2));
+    ctx.restore();
+  }
+
+  rows.forEach(function (r, i) {
+    var y = top + i * rowH + (rowH - barH) / 2;
+    var w = num(r.value, 0) / maxV * (R - L);
+    ctx.fillStyle = opt.barColor ? opt.barColor(r, i) : '#3b528b';
+    ctx.fillRect(L, y, Math.max(w, num(r.value, 0) > 0 ? 0.8 : 0), barH);
+    // 行标签
+    ctx.font = (opt.rowFont || tickFont)(opt.rowFontPx || 11.5);
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ellipsize(ctx, text(r.name), padL - 10, (opt.rowFont || tickFont)(opt.rowFontPx || 11.5)),
+      L - 7, y + barH / 2);
+    // 条尾数值
+    ctx.textAlign = 'left';
+    ctx.font = (opt.valFont || tickFont)(opt.valFontPx || 11);
+    ctx.fillStyle = INK;
+    ctx.fillText(ellipsize(ctx, text(r.label === undefined ? fmtInt(r.value) : r.label),
+      padR - 4, (opt.valFont || tickFont)(opt.valFontPx || 11)), L + Math.max(w, num(r.value, 0) > 0 ? 0.8 : 0) + 6, y + barH / 2);
+  });
+
+  // 底部细轴线
+  ctx.save();
+  ctx.strokeStyle = AXIS; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(L, Math.round(bottom) + 0.5);
+  ctx.lineTo(R + 6, Math.round(bottom) + 0.5);
+  ctx.stroke();
+  ctx.font = tickFont(10.5);
+  ctx.fillStyle = MUTED;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(opt.xLabel || '', L, bottom + 6);
+  ctx.textAlign = 'right';
+  ctx.fillText(opt.xMaxLabel === undefined ? fmtInt(maxV) : opt.xMaxLabel, R, bottom + 6);
+  ctx.restore();
+  var geo = { top: top, bottom: bottom, rowH: rowH, left: L, right: R, maxV: maxV };
+  if (opt.hover) wireHBarHover(canvas, rows, geo, opt);
+  return geo;
+}
+
+/**
+ * 横条 hover 高亮：在原始画面上叠一层浅底并重画当前条（提到满不透明度），
+ * 同时按同样的几何约定补画行标签与条尾数值。
+ */
+function paintHBarHover(canvas, rows, geo, index, opt) {
+  if (index < 0 || index >= rows.length) return;
+  var rect = canvas.getBoundingClientRect();
+  var w = Math.round(rect.width);
+  if (!w) return;
+  var ctx = canvas.getContext('2d');
+  var rowH = geo.rowH;
+  var barH = Math.min(18, rowH * 0.7);
+  var barY = geo.top + index * rowH + (rowH - barH) / 2;
+  var r = rows[index];
+  var bw = num(r.value, 0) / Math.max(1, num(geo.maxV, 1)) * (geo.right - geo.left);
+  var rowFont = (opt.rowFont || tickFont)(opt.rowFontPx || 11.5);
+  var valFont = (opt.valFont || tickFont)(opt.valFontPx || 11);
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.045)';
+  ctx.fillRect(0, geo.top + index * rowH, w, rowH);
+  ctx.fillStyle = opt.barColor ? opt.barColor(r, index) : '#3b528b';
+  ctx.fillRect(geo.left, barY, Math.max(bw, num(r.value, 0) > 0 ? 0.8 : 0), barH);
+  ctx.strokeStyle = AXIS;
+  ctx.lineWidth = 1;
+  if (num(r.value, 0) > 0) {
+    ctx.strokeRect(Math.round(geo.left) + 0.5, Math.round(barY) + 0.5,
+      Math.round(Math.max(bw, 0.8)) - 1, Math.round(barH));
+  }
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(ellipsize(ctx, text(r.name), (opt.labelWidth || 150) - 10, rowFont), geo.left - 7, barY + barH / 2);
+  ctx.textAlign = 'left';
+  ctx.font = valFont;
+  ctx.fillStyle = INK;
+  ctx.fillText(ellipsize(ctx, text(r.label === undefined ? fmtInt(r.value) : r.label),
+    (opt.valueWidth || 64) - 4, valFont), geo.left + Math.max(bw, num(r.value, 0) > 0 ? 0.8 : 0) + 6, barY + barH / 2);
+  ctx.restore();
+}
+
+function wireHBarHover(canvas, rows, geo, opt) {
+  if (canvas.dataset.hbarHover === '1') return;
+  canvas.dataset.hbarHover = '1';
+  var last = -1;
+  function redraw() {
+    if (typeof canvas.__hbarDraw === 'function') canvas.__hbarDraw();
+  }
+  canvas.addEventListener('mousemove', function (ev) {
+    var rect = canvas.getBoundingClientRect();
+    var idx = Math.floor((ev.clientY - rect.top - geo.top) / geo.rowH);
+    if (idx < 0 || idx >= rows.length) idx = -1;
+    if (idx === last) return;
+    last = idx;
+    redraw();
+    if (idx >= 0) paintHBarHover(canvas, rows, geo, idx, opt);
+  });
+  canvas.addEventListener('mouseleave', function () {
+    if (last === -1) return;
+    last = -1;
+    redraw();
+  });
+}
+
+/** 直方图：x 轴为 log10(权重)，条高为转移数量，条色按高度取 viridis */
+function drawHistogram(canvas, hist, panel) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  var bins = (hist && hist.bins) || [];
+  var counts = (hist && hist.counts) || [];
+  var n = Math.min(bins.length, counts.length);
+  var sum = 0;
+  for (var i = 0; i < n; i++) sum += num(counts[i], 0);
+  if (n < 2 || sum <= 0) {
+    drawNoData(ctx, 0, 0, c.w, c.h, '暂无权重数据');
+    return;
+  }
+  var L = 60, R = c.w - 16, T = panel ? 26 : 14, B = c.h - 52;
+  var maxC = 0;
+  for (var j = 0; j < n; j++) maxC = Math.max(maxC, num(counts[j], 0));
+  var sc = niceScale(0, Math.max(maxC, 1), 4);
+  var ys = function (v) { return B - num(v, 0) / sc.max * (B - T); };
+  var lo = num(bins[0], 0), hi = num(bins[n - 1], lo + 1);
+  var span = (hi - lo) || 1;
+  var xs = function (v) { return L + (num(v, 0) - lo) / span * (R - L); };
+
+  if (panel) drawPanelLabel(ctx, panel, 2, 2);
+
+  ctx.save();
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  sc.ticks.forEach(function (t) {
+    var y = Math.round(ys(t)) + 0.5;
+    ctx.moveTo(L, y); ctx.lineTo(R, y);
+  });
+  ctx.stroke();
+  ctx.restore();
+
+  var slot = (R - L) / n;
+  var bw = slot * 0.88;
+  for (var k = 0; k < n; k++) {
+    var v = num(counts[k], 0);
+    if (v <= 0) continue;
+    var x = L + slot * k + (slot - bw) / 2;
+    var y = ys(v);
+    ctx.fillStyle = vmap(v, 0, maxC);
+    ctx.fillRect(x, y, bw, B - y);
+    ctx.strokeStyle = AXIS; ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(bw) - 1, Math.max(Math.round(B - y), 1));
+  }
+
+  // 稀疏 x 刻度，避免重叠
+  var xticks = [];
+  var stepIdx = Math.max(1, Math.ceil(n / 7));
+  for (var m = 0; m < n; m += stepIdx) xticks.push(num(bins[m], 0));
+
+  drawAxis(ctx, {
+    left: L, right: R, top: T, bottom: B, xs: xs, ys: ys,
+    xticks: xticks, yticks: sc.ticks, grid: false,
+    xlabel: 'log₁₀(权重)', ylabel: '转移数量',
+    xtickLabel: function (v) { return fmtNum(v, 1); }
+  });
+  drawColorbar(ctx, R - 158, B + 20, 150, 7, '数量 ' + fmtInt(0), fmtInt(maxC), '');
+
+  // 面板标签与色标说明（避免与轴标题挤在一起）
+  ctx.save();
+  ctx.font = boldFont(13);
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('C', 2, 0);
+  ctx.font = tickFont(10.5);
+  ctx.fillStyle = MUTED;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('柱色 = 柱高（viridis 连续映射）', L, B + 38);
+  ctx.restore();
+}
+
+/* ---- 图表悬停提示 --------------------------------------------------------
+   绘图函数把命中点按 CSS 像素坐标登记到 canvas.__hits，鼠标移动时取最近点。
+   没有它，散点图/折线图只能看到形状而不知道每个点是什么，基本等于废图。 */
+var TIP = null;
+function tipEl() {
+  if (!TIP) {
+    TIP = document.createElement('div');
+    TIP.className = 'chart-tip';
+    document.body.appendChild(TIP);
+  }
+  return TIP;
+}
+function setHits(canvas, hits) {
+  if (canvas) canvas.__hits = hits || [];
+}
+function bindTip(canvas) {
+  if (!canvas || canvas.__tipBound) return;
+  canvas.__tipBound = true;
+  canvas.setAttribute('data-tip', '1');
+  canvas.addEventListener('mousemove', function (ev) {
+    var hits = canvas.__hits;
+    var tip = tipEl();
+    if (!hits || !hits.length) { tip.style.display = 'none'; return; }
+    var rect = canvas.getBoundingClientRect();
+    var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+    var best = null, bestD = Infinity;
+    for (var i = 0; i < hits.length; i++) {
+      var dx = hits[i].x - mx, dy = hits[i].y - my;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = hits[i]; }
+    }
+    var reach = best && best.r ? best.r + 8 : 16;
+    if (!best || bestD > reach * reach) { tip.style.display = 'none'; return; }
+    tip.textContent = best.tip;
+    tip.style.display = 'block';
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(6, Math.min(window.innerWidth - w - 8, ev.clientX + 14)) + 'px';
+    tip.style.top = Math.max(6, ev.clientY - h - 12) + 'px';
+  });
+  canvas.addEventListener('mouseleave', function () { tipEl().style.display = 'none'; });
+}
+
+/**
+ * 通用折线/散点图，支持线性或对数轴与参考线。
+ * opt = {points:[{x,y,tip}], xlog, ylog, xlabel, ylabel, panel, empty, mode,
+ *        refY:[{y,label,color}], guide:[{x,y}], ymin, ymax, footnote, ...}
+ */
+function drawSeriesChart(canvas, opt) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  var xlog = opt.xlog === true, ylog = opt.ylog === true;
+  var pts = (opt.points || []).filter(function (p) {
+    return p && isFinite(p.x) && isFinite(p.y) && (!xlog || p.x > 0) && (!ylog || p.y > 0);
+  });
+  if (pts.length < 2) {
+    drawNoData(ctx, 0, 0, c.w, c.h, opt.empty || '数据点不足，无法绘图');
+    return;
+  }
+  if (opt.panel) drawPanelLabel(ctx, opt.panel, 2, 2);
+
+  var L = opt.left || 66, R = c.w - 18, T = 26, B = c.h - 52;
+  var tx = function (v) { return xlog ? Math.log10(v) : v; };
+  var ty = function (v) { return ylog ? Math.log10(v) : v; };
+  var inv = function (t, log) { return log ? Math.pow(10, t) : t; };
+
+  var xsAll = pts.map(function (p) { return tx(p.x); });
+  var ysAll = pts.map(function (p) { return ty(p.y); });
+  (opt.refY || []).forEach(function (r) {
+    if (isFinite(r.y) && (!ylog || r.y > 0)) ysAll.push(ty(r.y));
+  });
+  var x0 = Math.min.apply(null, xsAll), x1 = Math.max.apply(null, xsAll);
+  var y0 = Math.min.apply(null, ysAll), y1 = Math.max.apply(null, ysAll);
+  if (opt.ymin !== undefined && opt.ymin !== null) y0 = Math.min(y0, ty(opt.ymin));
+  if (opt.ymax !== undefined && opt.ymax !== null) y1 = Math.max(y1, ty(opt.ymax));
+  if (x1 - x0 < 1e-9) { x0 -= 0.5; x1 += 0.5; }
+  if (y1 - y0 < 1e-9) { y0 -= 1; y1 += 1; }
+  if (!ylog) { var padY = (y1 - y0) * 0.08; y1 += padY; y0 -= padY; }
+  if (!xlog) { var padX = (x1 - x0) * 0.04; x0 -= padX; x1 += padX; }
+
+  var xs = function (v) { return L + (tx(v) - x0) / (x1 - x0) * (R - L); };
+  var ys = function (v) { return B - (ty(v) - y0) / (y1 - y0) * (B - T); };
+
+  ctx.save();
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  for (var g = 0; g <= 4; g++) {
+    var gy = Math.round(B - (B - T) * g / 4) + 0.5;
+    ctx.moveTo(L, gy); ctx.lineTo(R, gy);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  (opt.refY || []).forEach(function (r) {
+    if (!isFinite(r.y) || (ylog && r.y <= 0)) return;
+    var y = Math.round(ys(r.y)) + 0.5;
+    ctx.save();
+    ctx.strokeStyle = r.color || '#b2182b';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(R, y); ctx.stroke();
+    ctx.restore();
+    if (r.label) {
+      ctx.save();
+      ctx.font = tickFont(10);
+      ctx.fillStyle = r.color || '#b2182b';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.fillText(ellipsize(ctx, r.label, R - L - 8, tickFont(10)), L + 4, y - 2);
+      ctx.restore();
+    }
+  });
+
+  if (opt.guide && opt.guide.length >= 2) {
+    ctx.save();
+    ctx.strokeStyle = MUTED; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    opt.guide.forEach(function (p, i) {
+      if (i) ctx.lineTo(xs(p.x), ys(p.y)); else ctx.moveTo(xs(p.x), ys(p.y));
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (opt.mode !== 'points') {
+    ctx.save();
+    ctx.strokeStyle = opt.lineColor || '#21918c';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    pts.forEach(function (p, i) {
+      if (i) ctx.lineTo(xs(p.x), ys(p.y)); else ctx.moveTo(xs(p.x), ys(p.y));
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.fillStyle = opt.pointColor || '#440154';
+  var radius = pts.length > 60 ? 1.1 : 2.4;
+  var hits = [];
+  pts.forEach(function (p) {
+    var px = xs(p.x), py = ys(p.y);
+    ctx.beginPath();
+    ctx.arc(px, py, radius, 0, Math.PI * 2);
+    ctx.fill();
+    hits.push({ x: px, y: py, r: radius + 3,
+                tip: p.tip || (p.label ? (p.label + '\n' + p.x + ', ' + p.y) : (p.x + ', ' + p.y)) });
+  });
+  ctx.restore();
+  setHits(canvas, hits);
+  bindTip(canvas);
+
+  var xTicks = [], yTicks = [];
+  for (var i = 0; i <= 4; i++) {
+    xTicks.push(inv(x0 + (x1 - x0) * i / 4, xlog));
+    yTicks.push(inv(y0 + (y1 - y0) * i / 4, ylog));
+  }
+  var decimals = function (value) { return value === undefined ? 0 : value; };
+  drawAxis(ctx, {
+    left: L, right: R, top: T, bottom: B, xs: xs, ys: ys,
+    xticks: xTicks, yticks: yTicks, grid: false,
+    xlabel: opt.xlabel || '', ylabel: opt.ylabel || '',
+    xtickLabel: function (v) { return xlog ? tickText(v) : fmtNum(v, decimals(opt.xdecimals)); },
+    ytickLabel: function (v) { return ylog ? tickText(v) : fmtNum(v, decimals(opt.ydecimals)); }
+  });
+  if (opt.footnote) {
+    ctx.save();
+    ctx.font = tickFont(10.5);
+    ctx.fillStyle = MUTED;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(ellipsize(ctx, opt.footnote, R - L, tickFont(10.5)), L, B + 38);
+    ctx.restore();
+  }
+}
+
+/** 排名–权重（rank–abundance / Zipf）：log-log 下越接近直线越像幂律分布 */
+function drawRankAbundance(canvas, rows, panel) {
+  var sorted = (rows || []).slice().sort(function (a, b) { return num(b.w, 0) - num(a.w, 0); });
+  var c = fit(canvas);
+  if (sorted.length < 2) {
+    if (c) drawNoData(c.ctx, 0, 0, c.w, c.h, '后继种类少于 2 个，无法判断分布形状');
+    setHits(canvas, []);
+    return;
+  }
+  var points = sorted.map(function (r, i) {
+    return {
+      x: i + 1, y: Math.max(1, num(r.w, 0)),
+      tip: '后继「' + text(r.second) + '」  排名 ' + fmtInt(i + 1) + ' / ' + fmtInt(sorted.length) +
+        '\n权重 ' + fmtInt(r.w) +
+        '\n占该字出边 ' + fmtPct(num(r.share, 0), 2) +
+        '\n全群边际占比 ' + fmtPct(num(r.marginal_share, 0), 2) +
+        '\nlift ' + fmtNum(r.lift, 2)
+    };
+  });
+  drawSeriesChart(canvas, {
+    points: points, xlog: true, ylog: true, mode: 'points', panel: panel,
+    xlabel: '后继排名（log）', ylabel: '权重（log）',
+    pointColor: '#440154',
+    guide: [points[0], points[points.length - 1]],
+    footnote: '虚线 = 端点连线（幂律参考）'
+  });
+}
+
+/** lift：后继相对全群基线的富集倍数（1.0 = 与整体频率相同） */
+function drawLiftChart(canvas, rows, panel) {
+  var sorted = (rows || []).filter(function (r) { return num(r.lift, 0) > 0; })
+    .slice().sort(function (a, b) { return num(b.lift, 0) - num(a.lift, 0); });
+  var c = fit(canvas);
+  if (sorted.length < 2) {
+    if (c) drawNoData(c.ctx, 0, 0, c.w, c.h, '后继种类少于 2 个，无法计算富集倍数');
+    setHits(canvas, []);
+    return;
+  }
+  var points = sorted.map(function (r, i) {
+    return {
+      x: i + 1, y: num(r.lift, 0),
+      tip: '后继「' + text(r.second) + '」  lift ' + fmtNum(r.lift, 2) +
+        '\n（第 ' + fmtInt(i + 1) + ' / ' + fmtInt(sorted.length) + ' 名）' +
+        '\n该字内占比 ' + fmtPct(num(r.share, 0), 2) +
+        '\n全群边际占比 ' + fmtPct(num(r.marginal_share, 0), 2) +
+        '\n权重 ' + fmtInt(r.w)
+    };
+  });
+  drawSeriesChart(canvas, {
+    points: points, panel: panel, mode: 'points',
+    xlabel: '后继排名（按 lift 降序）', ylabel: 'lift', ydecimals: 1,
+    pointColor: '#5ec962',
+    refY: [{ y: 1, label: 'lift = 1（与整体频率持平）', color: '#777777' }],
+    footnote: '明显大于 1 = 该字特有搭配；≈1 = 全群高频字'
+  });
+}
+
+/** 热力图：单元格 viridis 着色 + 对比色数值 */
+function drawHeatmap(canvas, hm) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  var rows = (hm && hm.rows) || [];
+  var cols = (hm && hm.cols) || [];
+  var values = (hm && hm.values) || [];
+  if (!rows.length || !cols.length) {
+    drawNoData(ctx, 0, 0, c.w, c.h, '暂无前驱/后继数据');
+    return;
+  }
+  var padL = 40, padT = 26, padR = 8, padB = 76;
+  var gridW = c.w - padL - padR;
+  var gridH = c.h - padT - padB;
+  var cellW = gridW / cols.length;
+  var cellH = gridH / rows.length;
+  var maxV = 1;
+  for (var r = 0; r < rows.length; r++) {
+    var line = values[r] || [];
+    for (var q = 0; q < cols.length; q++) maxV = Math.max(maxV, num(line[q], 0));
+  }
+  var showValue = cellW >= 15 && cellH >= 13;
+  var cellFontPx = Math.min(11.5, Math.max(8, Math.min(cellW * 0.5, cellH * 0.55)));
+
+  drawPanelLabel(ctx, 'A', 2, 2);
+
+  for (var i = 0; i < rows.length; i++) {
+    var rowVals = values[i] || [];
+    for (var j2 = 0; j2 < cols.length; j2++) {
+      var val = num(rowVals[j2], 0);
+      var rgb = val > 0 ? viridisRGB(val / maxV) : [245, 245, 245];
+      var x = padL + j2 * cellW, y = padT + i * cellH;
+      ctx.fillStyle = rgbCss(rgb);
+      ctx.fillRect(x, y, cellW, cellH);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 0.75;
+      ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(cellW) - 1, Math.round(cellH) - 1);
+      if (showValue) {
+        ctx.font = axisFont(cellFontPx);
+        ctx.fillStyle = val > 0 ? textOn(rgb) : MUTED;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(val > 0 ? fmtInt(val) : '·', x + cellW / 2, y + cellH / 2);
+      }
+    }
+  }
+
+  // 行/列字符标签
+  ctx.font = tickFont(11);
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (var i2 = 0; i2 < rows.length; i2++) {
+    ctx.fillText(ellipsize(ctx, text(rows[i2]), padL - 6, tickFont(11)),
+      padL - 6, padT + i2 * cellH + cellH / 2);
+  }
+  ctx.save();
+  ctx.textBaseline = 'bottom';
+  for (var j3 = 0; j3 < cols.length; j3++) {
+    var cx = padL + j3 * cellW + cellW / 2;
+    ctx.save();
+    ctx.translate(cx, padT - 4);
+    ctx.rotate(-Math.PI / 3);
+    ctx.textAlign = 'left';
+    ctx.fillText(ellipsize(ctx, text(cols[j3]), cellH + 8, tickFont(11)), 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.font = labelFont(11.5);
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('后继字符', padL + gridW / 2, padT - 8);
+  ctx.save();
+  ctx.translate(11, padT + gridH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('前驱字符', 0, 0);
+  ctx.restore();
+  ctx.restore();
+
+  drawColorbar(ctx, padL, c.h - 28, Math.min(240, gridW - 20), 8, '0', fmtInt(maxV), '权重');
+}
+
+/** 转移网络图：中心 + 左前驱圈 + 右后继圈 */
+function drawNetwork(canvas, graph, center) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  var nodes = (graph && graph.nodes) || [];
+  var links = (graph && graph.links) || [];
+  if (!nodes.length) {
+    drawNoData(ctx, 0, 0, c.w, c.h, '暂无转移数据');
+    return;
+  }
+  drawPanelLabel(ctx, 'B', 2, 2);
+  var cx = c.w / 2, cy = c.h / 2 + 8;
+
+  var byKind = { center: [], prev: [], next: [] };
+  nodes.forEach(function (n) {
+    var k = n.kind === 'center' ? 'center' : (n.kind === 'prev' ? 'prev' : 'next');
+    byKind[k].push(n);
+  });
+  var centerNode = byKind.center[0] || { id: center || '', kind: 'center', w: 0, share: 1 };
+
+  var all = byKind.prev.concat(byKind.next);
+  var maxW = 1;
+  all.forEach(function (n) { maxW = Math.max(maxW, num(n.w, 0)); });
+  var base = Math.max(9, Math.min(26, Math.min(c.w, c.h) / 16));
+  var R = function (w) {
+    var t = Math.sqrt(Math.max(0, num(w, 0)) / maxW);
+    return base * (0.5 + 0.9 * t);
+  };
+
+  // 连线先用浅色画一遍，保证节点不被线盖住
+  var pos = {};
+  pos[centerNode.id] = { x: cx, y: cy, r: base * 1.35, kind: 'center' };
+  var prevs = byKind.prev, nexts = byKind.next;
+  var radius = Math.min(c.h / 2 - 26, (c.w / 2) * 0.52);
+  radius = Math.max(60, radius);
+  prevs.forEach(function (n, i) {
+    var a = prevs.length === 1 ? Math.PI : (Math.PI * 0.58 + Math.PI * 0.84 * (i / Math.max(1, prevs.length - 1)));
+    pos[n.id] = { x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius, r: R(n.w), kind: 'prev' };
+  });
+  nexts.forEach(function (n, i) {
+    var a = nexts.length === 1 ? 0 : (-Math.PI * 0.42 + Math.PI * 0.84 * (i / Math.max(1, nexts.length - 1)));
+    pos[n.id] = { x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius, r: R(n.w), kind: 'next' };
+  });
+
+  var maxLinkW = 1;
+  links.forEach(function (l) { maxLinkW = Math.max(maxLinkW, num(l.w, 0)); });
+
+  links.forEach(function (l) {
+    var a = pos[l.source], b = pos[l.target];
+    if (!a || !b) return;
+    var w = Math.max(0.8, Math.sqrt(num(l.w, 0) / maxLinkW) * 4.6);
+    var col = l.kind === 'in' ? IN_COLOR : OUT_COLOR;
+    var dx = b.x - a.x, dy = b.y - a.y;
+    var len = Math.hypot(dx, dy) || 1;
+    var ux = dx / len, uy = dy / len;
+    var sx = a.x + ux * a.r, sy = a.y + uy * a.r;
+    var tx = b.x - ux * (b.r + 5), ty = b.y - uy * (b.r + 5);
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.75;
+    ctx.lineWidth = w;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(tx, ty);
+    ctx.stroke();
+    ctx.restore();
+    // 箭头
+    var ah = Math.max(4.5, w * 2.1);
+    ctx.save();
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - ux * ah + uy * ah * 0.45, ty - uy * ah - ux * ah * 0.45);
+    ctx.lineTo(tx - ux * ah - uy * ah * 0.45, ty - uy * ah + ux * ah * 0.45);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  });
+
+  nodes.forEach(function (n) {
+    var p = pos[n.id];
+    if (!p) return;
+    var col = n.kind === 'prev' ? IN_COLOR : (n.kind === 'next' ? OUT_COLOR : '#111111');
+    ctx.save();
+    ctx.globalAlpha = n.kind === 'center' ? 1 : 0.9;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.font = boldFont(Math.max(9, Math.min(12.5, p.r * 0.95)));
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ellipsize(ctx, text(n.id), p.r * 1.7, boldFont(Math.max(9, Math.min(12.5, p.r * 0.95)))),
+      p.x, p.y);
+    ctx.restore();
+    // 节点旁直接标字符与权重
+    var label = n.kind === 'center' ? (text(n.id) + '  中心') : (text(n.id) + '  ' + fmtInt(num(n.w, 0)));
+    ctx.save();
+    ctx.font = tickFont(10.5);
+    ctx.fillStyle = INK;
+    var toRight = p.x >= cx;
+    ctx.textAlign = toRight ? 'left' : 'right';
+    ctx.textBaseline = 'middle';
+    var lx = p.x + (toRight ? p.r + 5 : -(p.r + 5));
+    lx = Math.max(3, Math.min(c.w - 3, lx));
+    ctx.fillText(ellipsize(ctx, label, toRight ? c.w - lx - 3 : lx - 3, tickFont(10.5)), lx, p.y);
+    ctx.restore();
+  });
+
+  // in / out 图例
+  ctx.save();
+  ctx.font = tickFont(10.5);
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  var lx0 = 6, ly0 = c.h - 12;
+  ctx.fillStyle = IN_COLOR;
+  ctx.beginPath(); ctx.arc(lx0 + 5, ly0, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = INK;
+  ctx.fillText('前驱 → 中心（入）', lx0 + 13, ly0);
+  var off = lx0 + 13 + measure(ctx, '前驱 → 中心（入）', tickFont(10.5)) + 22;
+  ctx.fillStyle = OUT_COLOR;
+  ctx.beginPath(); ctx.arc(off + 5, ly0, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = INK;
+  ctx.fillText('中心 → 后继（出）', off + 13, ly0);
+  ctx.restore();
+}
+
+/* =========================================================================
+ * 5. 与后端通信
+ * ====================================================================== */
+function request(method, path, query, body) {
+  var url = path;
+  if (query) {
+    var parts = [];
+    Object.keys(query).forEach(function (k) {
+      if (query[k] === null || query[k] === undefined) return;
+      parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(query[k]));
+    });
+    if (parts.length) url += '?' + parts.join('&');
+  }
+  var init = { method: method, cache: 'no-store', headers: { 'Accept': 'application/json' } };
+  if (method === 'POST') {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body || {});
+  }
+  return fetch(url, init).then(function (res) {
+    return res.text().then(function (raw) {
+      var data = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+      if (!res.ok) {
+        var msg = (data && data.error) ? data.error : ('请求失败（HTTP ' + res.status + '）');
+        var err = new Error(msg);
+        err.status = res.status;
+        throw err;
+      }
+      if (data === null || typeof data !== 'object') throw new Error('后端返回了非法 JSON');
+      return data;
+    });
+  }, function () {
+    throw new Error('无法连接后端（' + path + '），请确认管理后台进程仍在运行');
+  });
+}
+
+/** GET 并缓存 */
+function get(key, path, query) {
+  return request('GET', path, query).then(function (data) {
+    cache[key] = data;
+    return data;
+  });
+}
+
+/* ------------------------------------------------------------------ 提示 */
+/** errorStamp 记录最近一次出错的时刻，避免「刚显示的错误被同一轮渲染清掉」 */
+var errorStamp = 0;
+
+function showError(message) {
+  GLOBAL_ERROR = message ? String(message) : '';
+  errorStamp = Date.now();
+  renderBanners();
+}
+function clearError() {
+  if (GLOBAL_ERROR) { GLOBAL_ERROR = ''; errorStamp = 0; renderBanners(); }
+}
+function renderBanners() {
+  var host = document.getElementById('banner-host');
+  if (!host) return;
+  if (!GLOBAL_ERROR) { host.innerHTML = ''; return; }
+  host.innerHTML = '<div class="banner error"><span class="head">出错了：</span>' + esc(GLOBAL_ERROR) + '</div>';
+}
+function banner(host, kind, title, detail) {
+  var html = '<div class="banner ' + kind + '"><span class="head">' + esc(title) + '</span>';
+  if (detail) html += ' ' + esc(detail);
+  html += '</div>';
+  host.innerHTML = html;
+}
+
+/* =========================================================================
+ * 6. 页面骨架
+ * ====================================================================== */
+var view = document.getElementById('view');
+var foot = document.getElementById('foot');
+
+function renderShell() {
+  var html = '<div id="banner-host"></div>';
+  PAGES.forEach(function (p) {
+    html += '<section id="page-' + p + '" class="' + (p === state.page ? '' : 'hidden') + '"></section>';
+  });
+  view.innerHTML = html;
+  foot.textContent = '数据每 10 秒自动刷新 · 最近刷新时间：— · 接口 GET /api/overview /api/bans /api/match /api/generate /api/dictionary /api/system';
+}
+
+function currentSection() { return document.getElementById('page-' + state.page); }
+
+function setBusy(key, busy, node) {
+  jobs[key] = !!busy;
+  if (node) { node.disabled = !!busy; node.textContent = busy ? '处理中…' : (node.dataset.label || node.textContent); }
+}
+
+/* =========================================================================
+ * 7. 页面：数据大屏
+ * ====================================================================== */
+/** 紧凑指标条：一行 chip，横向排列并自动换行 */
+function chips(items) {
+  return '<div class="chips">' + items.join('') + '</div>';
+}
+/** 单个 chip（卡片内用 mini-chips 容器包裹） */
+function chip(k, v, unit, cls) {
+  return '<div class="chip' + (cls ? ' ' + cls : '') + '"><div class="k">' + esc(k) + '</div>' +
+    '<div class="v">' + esc(v) + (unit ? '<span class="u">' + esc(unit) + '</span>' : '') + '</div></div>';
+}
+/** 卡片内的小指标块网格 */
+function miniChips(items) {
+  return '<div class="mini-chips">' + items.join('') + '</div>';
+}
+
+function renderOverview() {
+  var d = cache.overview;
+  var sec = currentSection();
+  if (!d) {
+    sec.innerHTML = '<div class="card"><h2>数据大屏</h2>' +
+      '<p class="sub">正在加载 /api/overview …</p></div>';
+    return;
+  }
+  var groups = d.groups || [];
+  if (state.group === null && groups.length) state.group = groups[0].group;
+
+  var totBans = 0, totWhite = 0, totWeight = 0, totMem = 0, totQa = 0, totPairs = 0, totBytes = 0;
+  groups.forEach(function (g) {
+    totBans += num(g.bans, 0);
+    totWhite += num(g.whitelist, 0);
+    totWeight += num(g.transition_weight, 0);
+    totMem += num(g.memories, 0);
+    totQa += num(g.qa_weight, 0);
+    totPairs += num(g.qa_pairs, 0);
+    totBytes += num(g.bytes, 0);
+  });
+
+  var html = '';
+  html += chips([
+    chip('群数量', fmtInt(groups.length), '个'),
+    chip('总封禁数', fmtInt(totBans), '条'),
+    chip('总白名单数', fmtInt(totWhite), '人'),
+    chip('generate 总权值', fmtInt(totWeight), ''),
+    chip('intel 记忆总数', fmtInt(totMem), '条')
+  ]);
+
+  // 两张图并排（窄屏自动落成单列）
+  html += '<div class="grid">';
+  html += '<div class="card">' +
+    '<h2>各群字符转移数对比</h2>' +
+    '<p class="sub">纵轴为 <b>字符转移条数</b>（单位：条），柱顶直接标注数值；每组柱下为群简称。</p>' +
+    '<canvas id="cv-overview-a" style="width:100%;height:250px;display:block"></canvas>' +
+    '</div>';
+
+  html += '<div class="card">' +
+    '<h2>各群数据规模对比</h2>' +
+    '<p class="sub">qa_pairs / transitions / memories 三类量级差异很大，为避免小量被压扁，' +
+    '<b>每组按组内最大值归一化到 100</b>；纵向比较同一系列跨群的相对规模，' +
+    '绝对数值请看下方明细表。单位：条。</p>' +
+    '<canvas id="cv-overview-b" style="width:100%;height:272px;display:block"></canvas>' +
+    '</div>';
+  html += '</div>';
+
+  // 明细表：全宽卡片
+  html += '<div class="grid one"><div class="card">' +
+    '<h2>各群明细</h2>' +
+    '<p class="sub">bytes 已换算为 KB/MB；transition_weight 与 qa_weight 为权值总和（整数）。</p>' +
+    '<div class="scroll"><table><caption>表 1　各群训练与封禁明细（数据来源 GET /api/overview）</caption>' +
+    '<thead><tr><th>群</th><th>模型</th><th class="r">封禁</th><th class="r">白名单</th><th class="r">违规</th>' +
+    '<th class="r">问答对</th><th class="r">问答权值</th><th class="r">转移数</th><th class="r">转移权值</th>' +
+    '<th class="r">记忆</th><th class="r">关联</th><th class="r">seen</th><th class="r">体积</th>' +
+    '<th>当前模型权重占比</th></tr></thead><tbody>';
+
+  if (!groups.length) {
+    html += '<tr><td colspan="14" class="empty">暂无数据</td></tr>';
+  }
+  var maxW = 1;
+  groups.forEach(function (g) { maxW = Math.max(maxW, num(g.transition_weight, 0)); });
+  groups.forEach(function (g, i) {
+    var w = num(g.transition_weight, 0);
+    var share = w / maxW;
+    var mc = MODEL_COLORS[g.model] || '#3b528b';
+    html += '<tr>' +
+      '<td>' + esc(g.label || g.group) + '<div class="muted mono">' + esc(g.group) + '</div></td>' +
+      '<td><span class="tag g" style="border-color:' + esc(mc) + ';color:' + esc(mc) + '">' + esc(text(g.model)) + '</span></td>' +
+      '<td class="r">' + fmtInt(g.bans) + '</td>' +
+      '<td class="r">' + fmtInt(g.whitelist) + '</td>' +
+      '<td class="r">' + fmtInt(g.violations) + '</td>' +
+      '<td class="r">' + fmtInt(g.qa_pairs) + '</td>' +
+      '<td class="r">' + fmtInt(g.qa_weight) + '</td>' +
+      '<td class="r">' + fmtInt(g.transitions) + '</td>' +
+      '<td class="r">' + fmtInt(g.transition_weight) + '</td>' +
+      '<td class="r">' + fmtInt(g.memories) + '</td>' +
+      '<td class="r">' + fmtInt(g.links) + '</td>' +
+      '<td class="r">' + fmtInt(g.seen) + '</td>' +
+      '<td class="r">' + fmtBytes(g.bytes) + '</td>' +
+      '<td style="min-width:120px">' +
+        '<div class="dist"><span style="width:' + (share * 100).toFixed(2) + '%;background:' + viridisCss(vmapT(i, groups.length)) + '"></span></div>' +
+        '<div class="muted">' + fmtPct(share, 1) + ' · 权值 ' + fmtInt(w) + '</div>' +
+      '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table></div></div></div>';
+
+  // 模型切换：每群一张等宽卡片
+  html += '<div class="grid">';
+  groups.forEach(function (g) {
+    html += '<div class="card dense">' +
+      '<h2>' + esc(g.label || g.group) + '</h2>' +
+      '<p class="sub" style="margin-bottom:6px">当前模型：<b>' + esc(text(g.model)) + '</b>' +
+      '　切换即调用 POST /api/model</p>' +
+      segHtml('model-' + g.group, modelsList(), g.model, 'modelSeg') +
+      '<div id="model-msg-' + esc(g.group) + '"></div>' +
+      '</div>';
+  });
+  html += '</div>';
+
+  sec.innerHTML = html;
+
+  groups.forEach(function (g) {
+    wireSeg('model-' + g.group, 'modelSeg', function (model) {
+      postModel(g.group, model);
+    });
+  });
+  drawOverviewCharts();
+}
+
+/** 用于给分组条带取色的归一化位置 */
+function vmapT(i, n) { return n <= 1 ? 0.5 : 0.12 + 0.72 * (i / (n - 1)); }
+
+function drawOverviewCharts() {
+  var d = cache.overview;
+  if (!d) return;
+  var groups = d.groups || [];
+  var a = document.getElementById('cv-overview-a');
+  var b = document.getElementById('cv-overview-b');
+
+  if (a) {
+    if (!groups.length) { emptyCanvas(a, '暂无数据'); }
+    else {
+      drawBarChart(a, {
+        rows: groups.map(function (g) { return { name: groupShort(g.group), value: num(g.transitions, 0) }; }),
+        yLabel: '转移条数（条）',
+        barColor: function (r, i) { return viridisCss(vmapT(i, groups.length)); }
+      });
+    }
+  }
+  if (b) {
+    drawGroupedBar(b, {
+      groups: groups.map(function (g) {
+        return {
+          name: groupShort(g.group),
+          values: {
+            qa: num(g.qa_pairs, 0),
+            tr: num(g.transitions, 0),
+            mem: num(g.memories, 0)
+          }
+        };
+      }),
+      series: [
+        { key: 'qa', name: 'qa_pairs（问答对）', color: OKABE_ITO[0] },
+        { key: 'tr', name: 'transitions（字符转移）', color: OKABE_ITO[2] },
+        { key: 'mem', name: 'memories（intel 记忆）', color: OKABE_ITO[3] }
+      ],
+      yLabel: '组内归一化（%）'
+    });
+  }
+}
+
+/* =========================================================================
+ * 8. 页面：封禁管理
+ * ====================================================================== */
+function segHtml(id, options, current, group) {
+  var html = '<div class="seg" id="' + esc(id) + '" data-group="' + esc(group || '') + '">';
+  options.forEach(function (o) {
+    html += '<button type="button" data-value="' + esc(o) + '"' +
+      (String(o) === String(current) ? ' class="on"' : '') + '>' + esc(MODEL_LABELS[o] || o) + '</button>';
+  });
+  return html + '</div>';
+}
+
+function wireSeg(id, group, handler) {
+  var node = document.getElementById(id);
+  if (!node) return;
+  node.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('button[data-value]');
+    if (!btn || btn.classList.contains('on')) return;
+    handler(btn.dataset.value, node);
+  });
+}
+
+function tabsHtml(id, options, current) {
+  var html = '<div class="seg lg" id="' + esc(id) + '">';
+  options.forEach(function (o) {
+    html += '<button type="button" data-value="' + esc(o.value) + '"' +
+      (o.value === current ? ' class="on"' : '') + '>' + esc(o.label) + '</button>';
+  });
+  return html + '</div>';
+}
+function wireTabs(id, handler) {
+  var node = document.getElementById(id);
+  if (!node) return;
+  node.addEventListener('click', function (ev) {
+    var btn = ev.target.closest('button[data-value]');
+    if (!btn || btn.classList.contains('on')) return;
+    handler(btn.dataset.value);
+  });
+}
+
+function renderBans() {
+  var sec = currentSection();
+  var groups = (cache.overview && cache.overview.groups) || [];
+  if (!groups.length) {
+    sec.innerHTML = '<div class="card"><h2>封禁管理</h2>' +
+      '<p class="sub">正在加载群列表（GET /api/overview）…</p></div>';
+    return;
+  }
+  if (!state.group || !findGroup(state.group)) state.group = groups[0].group;
+  var group = state.group;
+  var d = cache.bans && String(cache.bans.group) === String(group) ? cache.bans : null;
+
+  var html = '';
+  html += '<div class="card">' +
+    '<div class="card-head"><div class="grow">' +
+      '<h2>目标群与模型</h2>' +
+      '<p class="sub">切换群会立即重新拉取 <b>GET /api/bans?group=…</b>；分段控件即时切换该群模型（POST /api/model）。</p>' +
+    '</div></div>' +
+    '<div class="toolbar" style="margin-bottom:0">' +
+      '<div class="field"><label for="ban-group">群</label><select id="ban-group">' +
+        groups.map(function (g) {
+          return '<option value="' + esc(g.group) + '"' + (String(g.group) === String(group) ? ' selected' : '') + '>' +
+            esc(g.label || g.group) + '</option>';
+        }).join('') +
+      '</select></div>' +
+      '<div class="field"><label>模型（POST /api/model）</label>' +
+        segHtml('ban-model', modelsList(), modelOf(group), 'modelSeg') + '</div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn danger" id="dstx-btn">大赦天下</button></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="ban-refresh">刷新</button></div>' +
+    '</div>' +
+    '<div id="ban-msg"></div>';
+  html += '</div>';
+
+  if (!d) {
+    html += '<div class="card"><p class="sub">正在加载该群封禁数据…</p></div>';
+    sec.innerHTML = html;
+    wireBansShell(group);
+    loadBans(group);
+    return;
+  }
+
+  var bans = d.bans || [], white = d.whitelist || [], viol = d.violations || [];
+  html += chips([
+    chip('当前封禁', fmtInt(bans.length), '条'),
+    chip('生效白名单', fmtInt(white.length), '人'),
+    chip('违规记录', fmtInt(viol.length), '条'),
+    chip('最近违规', viol.length ? fmtTime(viol[0].at) : DASH, '')
+  ]);
+
+  // 手动封禁 + 白名单发放：两张表单卡并排
+  html += '<div class="grid two">';
+  html += '<div class="card">' +
+    '<h2>手动封禁</h2>' +
+    '<p class="sub">调用 <b>POST /api/ban</b>，方式记为「后台封禁」。时长范围 1–31536000 秒（1 秒 ~ 365 天）。</p>' +
+    '<div class="toolbar" style="margin-bottom:8px">' +
+      '<div class="field"><label for="ban-uid">QQ 号</label>' +
+        '<input type="text" id="ban-uid" class="w120" inputmode="numeric" placeholder="数字 QQ 号"></div>' +
+      '<div class="field"><label for="ban-sec">时长（秒）</label>' +
+        '<input type="number" id="ban-sec" class="w120" min="1" max="31536000" step="1" value="43200">' +
+        '<span class="hint">范围 1–31536000</span></div>' +
+      '<div class="field"><label for="ban-reason">原因</label>' +
+        '<input type="text" id="ban-reason" class="w160" value="后台封禁"></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn danger" id="ban-submit">封禁</button></div>' +
+    '</div>' +
+    '<div id="ban-form-msg"></div>' +
+    '</div>';
+
+  html += '<div class="card">' +
+    '<h2>白名单发放</h2>' +
+    '<p class="sub">发放 <b>POST /api/whitelist/grant</b>（时长 30–86400 秒）。</p>' +
+    '<div class="toolbar" style="margin-bottom:8px">' +
+      '<div class="field"><label for="wl-uid">QQ 号</label>' +
+        '<input type="text" id="wl-uid" class="w120" inputmode="numeric" placeholder="数字 QQ 号"></div>' +
+      '<div class="field"><label for="wl-sec">时长（秒）</label>' +
+        '<input type="number" id="wl-sec" class="w120" min="30" max="86400" step="1" value="300">' +
+        '<span class="hint">范围 30–86400</span></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="wl-submit">发放白名单</button></div>' +
+    '</div>' +
+    '<div id="wl-msg"></div>' +
+    '<div class="scroll" style="max-height:220px"><table><caption>表 4　生效中的白名单</caption>' +
+    '<thead><tr><th>QQ 号</th><th>剩余时间</th><th class="r">原时长</th><th>发放时间</th><th></th></tr></thead><tbody>' +
+    (white.length ? white.map(function (w) {
+      return '<tr><td class="mono">' + esc(text(w.user_id)) + '</td>' +
+        '<td>' + fmtDur(w.remaining) + '</td>' +
+        '<td class="r">' + fmtDurLabel(num(w.seconds, 0)) + '<div class="muted">' + fmtInt(w.seconds) + ' 秒</div></td>' +
+        '<td class="muted">' + fmtTime(w.granted_at) + '</td>' +
+        '<td><button type="button" class="btn sm revoke" data-uid="' + esc(w.user_id) + '">撤销</button></td></tr>';
+    }).join('') : '<tr><td colspan="5" class="empty">暂无数据</td></tr>') +
+    '</tbody></table></div></div>';
+  html += '</div>';
+
+  // 封禁名单 + 违规记录：两张全宽卡片并排
+  html += '<div class="grid two">';
+  html += '<div class="card">' +
+    '<h2>封禁名单<span class="aux">' + fmtInt(bans.length) + ' 条</span></h2>' +
+    '<div class="scroll"><table><caption>表 2　封禁名单（remaining 由服务端按秒计算）</caption>' +
+    '<thead><tr><th>QQ 号</th><th>剩余时间</th><th class="r">原时长</th><th>原因</th><th>方式</th><th>创建时间</th><th></th></tr></thead><tbody>' +
+    (bans.length ? bans.map(function (b) {
+      return '<tr><td class="mono">' + esc(text(b.user_id)) + '</td>' +
+        '<td>' + fmtDur(b.remaining) + '</td>' +
+        '<td class="r">' + fmtDurLabel(num(b.seconds, 0)) + '<div class="muted">' + fmtInt(b.seconds) + ' 秒</div></td>' +
+        '<td>' + esc(text(b.reason)) + '</td>' +
+        '<td>' + esc(text(b.mode)) + '</td>' +
+        '<td class="muted">' + fmtTime(b.created_at) + '</td>' +
+        '<td><button type="button" class="btn sm unban" data-uid="' + esc(b.user_id) + '">解封</button></td></tr>';
+    }).join('') : '<tr><td colspan="7" class="empty">暂无数据</td></tr>') +
+    '</tbody></table></div></div>';
+
+  html += '<div class="card">' +
+    '<h2>违规记录<span class="aux">最新在前，最多 50 条</span></h2>' +
+    '<div class="scroll"><table><caption>表 3　违规记录；等级 IV 及以上标红</caption>' +
+    '<thead><tr><th>QQ 号</th><th>时间</th><th>等级</th><th>命中词</th></tr></thead><tbody>' +
+    (viol.length ? viol.map(function (v) {
+      var heavy = ['IV', 'V'].indexOf(String(v.grade)) >= 0;
+      return '<tr><td class="mono">' + esc(text(v.user_id)) + '</td>' +
+        '<td class="muted">' + fmtTime(v.at) + '</td>' +
+        '<td' + (heavy ? ' class="z-hi"' : '') + '>' + esc(text(v.grade)) + '</td>' +
+        '<td>' + esc(text(v.term)) + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty">暂无数据</td></tr>') +
+    '</tbody></table></div></div>';
+  html += '</div>';
+
+  var kept = keepMessages(['ban-form-msg', 'wl-msg', 'ban-msg']);
+  sec.innerHTML = html;
+  restoreMessages(kept);
+  wireBansShell(group);
+
+  // 解封
+  Array.prototype.forEach.call(sec.querySelectorAll('.unban'), function (btn) {
+    btn.addEventListener('click', function () {
+      post('/api/unban', { group: group, user_id: btn.dataset.uid },
+        '已解封 ' + btn.dataset.uid, 'ban-form-msg', function () { refreshBans(group, true); });
+    });
+  });
+  Array.prototype.forEach.call(sec.querySelectorAll('.revoke'), function (btn) {
+    btn.addEventListener('click', function () {
+      post('/api/whitelist/revoke', { group: group, user_id: btn.dataset.uid },
+        '已撤销 ' + btn.dataset.uid + ' 的白名单', 'wl-msg', function () { refreshBans(group, true); });
+    });
+  });
+  var submit = document.getElementById('ban-submit');
+  if (submit) submit.addEventListener('click', function () {
+    var uid = (document.getElementById('ban-uid').value || '').trim();
+    var seconds = parseInt(document.getElementById('ban-sec').value, 10);
+    var reason = (document.getElementById('ban-reason').value || '').trim();
+    if (!/^\d{5,12}$/.test(uid)) { banner(document.getElementById('ban-form-msg'), 'error', 'QQ 号无效：', '请输入 5–12 位数字'); return; }
+    if (!isFinite(seconds) || seconds < 1 || seconds > 31536000) {
+      banner(document.getElementById('ban-form-msg'), 'error', '时长无效：', '必须在 1–31536000 秒之间'); return;
+    }
+    post('/api/ban', { group: group, user_id: uid, seconds: seconds, reason: reason || '后台封禁' },
+      '已封禁 ' + uid + '（' + fmtDurLabel(seconds) + '）', 'ban-form-msg', function () { refreshBans(group, true); });
+  });
+  var wl = document.getElementById('wl-submit');
+  if (wl) wl.addEventListener('click', function () {
+    var uid = (document.getElementById('wl-uid').value || '').trim();
+    var seconds = parseInt(document.getElementById('wl-sec').value, 10);
+    if (!/^\d{5,12}$/.test(uid)) { banner(document.getElementById('wl-msg'), 'error', 'QQ 号无效：', '请输入 5–12 位数字'); return; }
+    if (!isFinite(seconds) || seconds < 30 || seconds > 86400) {
+      banner(document.getElementById('wl-msg'), 'error', '时长无效：', '必须在 30–86400 秒之间'); return;
+    }
+    post('/api/whitelist/grant', { group: group, user_id: uid, seconds: seconds },
+      '已为 ' + uid + ' 发放白名单（' + fmtDurLabel(seconds) + '）', 'wl-msg', function () { refreshBans(group, true); });
+  });
+}
+
+function wireBansShell(group) {
+  var sel = document.getElementById('ban-group');
+  if (sel) sel.addEventListener('change', function () {
+    state.group = sel.value;
+    if (cache.overview) {
+      var g = findGroup(state.group);
+      if (g) { /* 保持 overview 中的模型信息 */ }
+    }
+    clearError();
+    renderBans();
+    loadBans(state.group);
+  });
+  wireSeg('ban-model', 'modelSeg', function (model) { postModel(group, model); });
+  var dstx = document.getElementById('dstx-btn');
+  if (dstx) dstx.addEventListener('click', function () {
+    if (!window.confirm('确定要对所有群执行「大赦天下」并清空全部封禁记录吗？')) return;
+    dstx.disabled = true;
+    dstx.textContent = '处理中…';
+    request('POST', '/api/dstx', null, {}).then(function (data) {
+      var released = data.released || [];
+      banner(document.getElementById('ban-msg'), 'ok',
+        '大赦天下完成，共释放 ' + released.length + ' 个账号：',
+        released.length ? released.join('、') : '（本来就没有封禁）');
+      refreshBans(group, true);
+    }).catch(function (err) {
+      banner(document.getElementById('ban-msg'), 'error', '大赦天下失败：', err.message);
+    }).then(function () {
+      dstx.disabled = false;
+      dstx.textContent = '大赦天下（POST /api/dstx）';
+    });
+  });
+  var rf = document.getElementById('ban-refresh');
+  if (rf) rf.addEventListener('click', function () { refreshBans(group, true); });
+}
+
+function loadBans(group) {
+  return get('bans', '/api/bans', { group: group }).then(function () {
+    clearError();
+    if (state.page === 'bans' && String(state.group) === String(group)) renderBans();
+  }).catch(function (err) {
+    showError(err.message);
+    if (state.page === 'bans') {
+      var host = document.getElementById('ban-msg');
+      if (host) banner(host, 'error', '加载封禁数据失败：', err.message);
+    }
+  });
+}
+
+function refreshBans(group, force) {
+  cache.bans = null;
+  return loadBans(group);
+}
+
+/** 通用 POST：成功后显示绿色提示并回调 */
+function post(path, body, successText, hostId, then) {
+  var host = hostId ? document.getElementById(hostId) : null;
+  if (host) host.innerHTML = '<div class="banner">请求中…</div>';
+  return request('POST', path, null, body).then(function () {
+    clearError();
+    if (host) banner(host, 'ok', successText, '');
+    if (then) then();
+    if (state.page !== 'system') refreshCurrent(true);
+  }).catch(function (err) {
+    showError(err.message);
+    if (host) banner(host, 'error', successText + '失败：', err.message);
+  });
+}
+
+/**
+ * 切换模型。onSuccess(model) 用于就地更新分段控件，避免整页重渲染打断表单输入。
+ */
+function postModel(group, model, onSuccess) {
+  // 提示要写进「当前可见」的容器：训练页用 #model-msg，封禁页用 #ban-msg，
+  // 数据大屏用每群卡片里的 #model-msg-<群号>。
+  var host = state.page === 'train'
+    ? (document.getElementById('model-msg') || document.getElementById('ban-msg'))
+    : (state.page === 'overview'
+      ? (document.getElementById('model-msg-' + group) || document.getElementById('ban-msg'))
+      : (document.getElementById('ban-msg') || document.getElementById('model-msg')));
+  var kept = keepMessages(['model-msg', 'model-msg-' + group]);
+  return request('POST', '/api/model', null, { group: group, model: model }).then(function () {
+    clearError();
+    var g = findGroup(group);
+    if (g) g.model = model;
+    var seg = document.getElementById('ban-model') || document.getElementById('train-model') ||
+      document.getElementById('model-' + group);
+    if (seg) {
+      Array.prototype.forEach.call(seg.querySelectorAll('button[data-value]'), function (b) {
+        b.classList.toggle('on', String(b.dataset.value) === String(model));
+      });
+    }
+    if (onSuccess) onSuccess(model);
+    if (host) banner(host, 'ok', groupLabel(group) + ' 已切换为 ' + model, '');
+    // 后台静默刷新概况，保持卡片与表格里的模型一致；提示条重渲染后补回
+    get('overview', '/api/overview').then(function () {
+      if (state.page === 'overview') renderOverview();
+      else if (state.page === 'train') restoreMessages(kept);
+    }).catch(function () { /* 概况刷新失败不打断当前操作 */ });
+  }).catch(function (err) {
+    showError(err.message);
+    if (host) banner(host, 'error', '切换模型失败：', err.message);
+  });
+}
+
+/* =========================================================================
+ * 9. 页面：训练管理
+ * ====================================================================== */
+function renderTrain() {
+  var sec = currentSection();
+  var groups = (cache.overview && cache.overview.groups) || [];
+  if (!groups.length) {
+    sec.innerHTML = '<div class="card"><h2>训练管理</h2>' +
+      '<p class="sub">正在加载群列表…</p></div>';
+    return;
+  }
+  if (!state.group || !findGroup(state.group)) state.group = groups[0].group;
+  var group = state.group;
+
+  var html = '';
+  html += '<div class="card">' +
+    '<div class="card-head"><div class="grow">' +
+      '<h2>目标群与模型</h2>' +
+      '<p class="sub">问答对来自 <b>GET /api/match</b>，字符转移模型来自 <b>GET /api/generate</b>。' +
+      '训练页<b>不参与定时自动刷新</b>，以免打断搜索与下钻；需要新数据请点「刷新数据」。</p>' +
+    '</div>' +
+    '<div><button type="button" class="btn" id="train-refresh">刷新数据</button></div>' +
+    '</div>' +
+    '<div class="toolbar" style="margin-bottom:0">' +
+      '<div class="field"><label for="train-group">群</label><select id="train-group">' +
+        groups.map(function (g) {
+          return '<option value="' + esc(g.group) + '"' + (String(g.group) === String(group) ? ' selected' : '') + '>' +
+            esc(g.label || g.group) + '</option>';
+        }).join('') +
+      '</select></div>' +
+      '<div class="field"><label>模型（POST /api/model）</label>' +
+        segHtml('train-model', modelsList(), modelOf(group), 'modelSeg') + '</div>' +
+      '<div class="field"><label>子面板</label>' +
+        tabsHtml('train-tabs', [{ value: 'match', label: 'match 模型' }, { value: 'generate', label: 'generate 模型' }], state.trainTab) +
+      '</div>' +
+    '</div>' +
+    '<div id="model-msg"></div>' +
+    '</div>';
+
+  html += '<div id="train-body"></div>';
+
+  html += '<div class="grid one"><div class="card">' +
+    '<h2>训练数据管理</h2>' +
+    '<p class="sub">数据源来自 <b>GET /api/sources</b>（pre 目录下的文件夹与文件）。' +
+    'name 填「文件夹/文件名」；train 从语料训练，save 写回备份，load 载入备份，clear 清空模型数据。</p>' +
+    '<div class="toolbar">' +
+      '<div class="field"><label for="src-name">name（文件夹/文件名）</label>' +
+        '<input type="text" id="src-name" class="w160" placeholder="文件夹/文件名"></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="src-train">训练 train</button></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="src-save">保存 save</button></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="src-load">载入 load</button></div>' +
+      '<div class="field"><label for="src-clear">清空模型（clear）</label>' +
+        '<select id="src-clear" class="w120" style="min-width:130px">' +
+          modelsList().map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('') +
+        '</select></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn danger" id="src-clear-btn">清空</button></div>' +
+    '</div>' +
+    '<div id="src-msg"></div>' +
+    '<div class="section-title" style="margin-top:12px">可用数据源（点击填入 name）</div>' +
+    '<div id="src-list" class="hint">正在加载…</div>' +
+    '</div></div>';
+
+  var pending = keepMessages(['model-msg', 'src-msg', 'adj-msg', 'ex-msg']);
+  var formState = captureFormState(sec);
+  sec.innerHTML = html;
+  restoreMessages(pending);
+  applyFormState(formState);
+
+  var sel = document.getElementById('train-group');
+  sel.addEventListener('change', function () {
+    state.group = sel.value;
+    state.genUser = null;       // 换群后旧的作用域与下钻都不再适用
+    state.pair = null;
+    cache.match = null; cache.generate = null; cache.generateUsers = null;
+    cache.pairDetail = null; cache.explore = null;
+    cache.loops = null; cache.loopPlan = null;
+    clearError();
+    renderTrain();
+    refreshTrainData();
+  });
+  wireSeg('train-model', 'modelSeg', function (model) { postModel(group, model); });
+  wireTabs('train-tabs', function (value) {
+    state.trainTab = value;
+    state.pair = null;
+    cache.pairDetail = null;
+    cache.explore = null;
+    renderTrain();
+    refreshTrainData();
+  });
+  var refreshBtn = document.getElementById('train-refresh');
+  if (refreshBtn) refreshBtn.addEventListener('click', function () {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '刷新中…';
+    // 只刷新数据，不清空输入框与已展开的状态（refreshTrainData 内部会保留表单值）
+    cache.match = null;
+    cache.generate = null;
+    cache.generateUsers = null;
+    Promise.resolve(refreshTrainData()).then(function () {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = '刷新数据';
+    });
+  });
+  wireSources();
+  renderTrainBody();
+  refreshTrainData();
+}
+
+function wireSources() {
+  var listHost = document.getElementById('src-list');
+  get('sources', '/api/sources').then(function (data) {
+    var sources = data.sources || [];
+    if (!sources.length) { listHost.textContent = '暂无数据源（pre 目录为空）'; return; }
+    listHost.innerHTML = sources.map(function (s) {
+      return '<span class="tag src-pick" style="cursor:pointer" data-name="' + esc(String(s).replace(/^-\s*/, '').trim()) +
+        '" title="点击填入 name">' + esc(s) + '</span>';
+    }).join('');
+    Array.prototype.forEach.call(listHost.querySelectorAll('.src-pick'), function (node) {
+      node.addEventListener('click', function () {
+        document.getElementById('src-name').value = node.dataset.name;
+      });
+    });
+  }).catch(function (err) {
+    listHost.textContent = '加载数据源失败：' + err.message;
+    showError(err.message);
+  });
+
+  var trainBtn = document.getElementById('src-train');
+  trainBtn.addEventListener('click', function () {
+    var name = (document.getElementById('src-name').value || '').trim();
+    if (!name) { banner(document.getElementById('src-msg'), 'error', '缺少 name：', '请填写「文件夹/文件名」'); return; }
+    trainBtn.disabled = true; trainBtn.textContent = '训练中…（可能较慢）';
+    request('POST', '/api/train', null, { group: state.group, name: name }).then(function (data) {
+      clearError();
+      var extra = (data && data.attributed !== undefined && data.attributed !== null)
+        ? ' 其中带发送者归属的新增转移 ' + fmtInt(data.attributed) + ' 条（可用于按 QQ 筛选）。'
+        : '';
+      banner(document.getElementById('src-msg'), 'ok', '训练完成。', summarizeReport(data) + extra);
+      refreshTrainData();
+      refreshCurrent(true);
+    }).catch(function (err) {
+      showError(err.message);
+      banner(document.getElementById('src-msg'), 'error', '训练失败：', err.message);
+    }).then(function () { trainBtn.disabled = false; trainBtn.textContent = '训练 train'; });
+  });
+
+  var saveBtn = document.getElementById('src-save');
+  saveBtn.addEventListener('click', function () {
+    var name = (document.getElementById('src-name').value || '').trim();
+    if (!name) { banner(document.getElementById('src-msg'), 'error', '缺少 name：', '请填写目标文件夹'); return; }
+    request('POST', '/api/save', null, { group: state.group, name: name }).then(function (data) {
+      clearError();
+      banner(document.getElementById('src-msg'), 'ok', '已写回备份 ' + name + '。', summarizeReport(data.summary));
+    }).catch(function (err) {
+      showError(err.message);
+      banner(document.getElementById('src-msg'), 'error', '保存失败：', err.message);
+    });
+  });
+
+  var loadBtn = document.getElementById('src-load');
+  loadBtn.addEventListener('click', function () {
+    var name = (document.getElementById('src-name').value || '').trim();
+    if (!name) { banner(document.getElementById('src-msg'), 'error', '缺少 name：', '请填写来源文件夹'); return; }
+    request('POST', '/api/load', null, { group: state.group, name: name }).then(function (data) {
+      clearError();
+      banner(document.getElementById('src-msg'), 'ok', '已载入备份 ' + name + '。', summarizeReport(data.report));
+      refreshTrainData();
+      refreshCurrent(true);
+    }).catch(function (err) {
+      showError(err.message);
+      banner(document.getElementById('src-msg'), 'error', '载入失败：', err.message);
+    });
+  });
+
+  var clearBtn = document.getElementById('src-clear-btn');
+  clearBtn.addEventListener('click', function () {
+    var model = document.getElementById('src-clear').value;
+    if (!window.confirm('确定要清空 ' + groupLabel(state.group) + ' 的 ' + model + ' 模型数据吗？该操作不可撤销。')) return;
+    request('POST', '/api/clear', null, { group: state.group, model: model }).then(function () {
+      clearError();
+      banner(document.getElementById('src-msg'), 'ok', '已清空 ' + model + ' 模型数据。', '');
+      refreshTrainData();
+      refreshCurrent(true);
+    }).catch(function (err) {
+      showError(err.message);
+      banner(document.getElementById('src-msg'), 'error', '清空失败：', err.message);
+    });
+  });
+}
+
+/** 把后端返回的任意 summary/report 对象渲染成一行文字，避免 [object Object] */
+function summarizeReport(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  var parts = [];
+  Object.keys(obj).forEach(function (k) {
+    var v = obj[k];
+    if (v === null || v === undefined) return;
+    if (typeof v === 'object') {
+      var inner = summarizeReport(v);
+      if (inner) parts.push(k + '={' + inner + '}');
+    } else {
+      parts.push(k + '=' + v);
+    }
+  });
+  return parts.join('  ');
+}
+
+function refreshTrainData() {
+  if (!state.group) return;
+  var group = state.group;
+  var query = { group: group };
+  Object.keys(genUserParam()).forEach(function (k) { query[k] = genUserParam()[k]; });
+  var tasks = [];
+  tasks.push(get('match', '/api/match', { group: group }).catch(function (err) {
+    if (state.page === 'train') banner(document.getElementById('train-body'), 'error', '加载 match 数据失败：', err.message);
+    else showError(err.message);
+  }));
+  tasks.push(get('generate', '/api/generate', query).catch(function (err) {
+    if (state.page === 'train') banner(document.getElementById('train-body'), 'error', '加载 generate 数据失败：', err.message);
+    else showError(err.message);
+  }));
+  tasks.push(get('generateUsers', '/api/generate/users', { group: group }).catch(function (err) {
+    if (state.page === 'train') banner(document.getElementById('train-body'), 'error', '加载 QQ 列表失败：', err.message);
+    else showError(err.message);
+  }));
+  tasks.push(request('GET', '/api/loops', { group: group }).then(function (data) {
+    if (String(state.group) === String(group)) cache.loops = data;
+  }).catch(function (err) {
+    if (state.page === 'train') banner(document.getElementById('train-body'), 'error', '加载回环列表失败：', err.message);
+    else showError(err.message);
+  }));
+  return Promise.all(tasks).then(function () {
+    if (state.page === 'train' && String(state.group) === String(group)) renderTrainBody();
+  });
+}
+
+/** 面板重渲染前暂存若干提示容器，避免成功的绿色提示条被立刻抹掉 */
+function keepMessages(ids) {
+  var kept = {};
+  ids.forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el && el.innerHTML) kept[id] = el.innerHTML;
+  });
+  return kept;
+}
+
+function restoreMessages(kept) {
+  Object.keys(kept || {}).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.innerHTML = kept[id];
+  });
+}
+
+/**
+ * 表单状态保护：重渲染前记下所有输入控件的值，渲染后写回。
+ * 定时刷新与手动刷新都不允许清空用户正在填写的内容。
+ */
+function captureFormState(root) {
+  var scope = root || document;
+  var snapshot = {};
+  Array.prototype.forEach.call(scope.querySelectorAll('input, select, textarea'), function (el) {
+    if (!el.id) return;
+    if (el.type === 'radio' || el.type === 'checkbox') snapshot[el.id] = { checked: el.checked };
+    else snapshot[el.id] = { value: el.value };
+  });
+  return snapshot;
+}
+
+function applyFormState(snapshot) {
+  if (!snapshot) return;
+  Object.keys(snapshot).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var saved = snapshot[id];
+    if (saved && saved.checked !== undefined) el.checked = saved.checked;
+    else if (saved && saved.value !== undefined && saved.value !== '') el.value = saved.value;
+  });
+}
+
+/* --------------------------------------------------------------------------
+ * IME（拼音等）友好输入：
+ * 组合期间（isComposing / compositionstart..end）绝不校验、不截断、不重渲染，
+ * 只在提交时用 Array.from 取首个字符，避免把代理对（emoji）切坏。
+ * ------------------------------------------------------------------------ */
+function isComposing(ev) {
+  return !!(ev && (ev.isComposing || ev.keyCode === 229));
+}
+
+/** 绑定「提交快捷键 + IME 安全」：组合中（拼音候选）绝不触发提交、不改动输入框 */
+function bindSubmitInput(el, onCommit, opts) {
+  if (!el) return;
+  var textarea = el.tagName === 'TEXTAREA';
+  var ctrlOnly = !!(opts && opts.ctrlEnter) || textarea;   // 文本域里回车换行是正常输入
+  el.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' || isComposing(ev)) return;
+    if (ctrlOnly && !(ev.ctrlKey || ev.metaKey)) return;
+    ev.preventDefault();
+    onCommit(ev);
+  });
+  el.addEventListener('compositionstart', function () { el.dataset.composing = '1'; });
+  el.addEventListener('compositionend', function () { delete el.dataset.composing; });
+}
+
+/** 输入类控件的统一行为：不做任何长度截断与字符过滤，只在提交时校验 */
+function readInput(id) {
+  var el = document.getElementById(id);
+  return el ? String(el.value || '').trim() : '';
+}
+
+/* =========================================================================
+ * 9b. generate 作用域（全部数据 / 单个 QQ）与归属覆盖率
+ * ====================================================================== */
+
+/** 缓存里的 generate / explore 数据是否属于当前选中的作用域 */
+function cacheScopeMatches(entry) {
+  if (!entry) return false;
+  var scope = entry.scope === 'user' ? 'user' : 'all';
+  if (scope !== (state.genUser ? 'user' : 'all')) return false;
+  if (scope === 'user') return String(entry.user || '') === String(state.genUser);
+  return true;
+}
+
+function userShort(user) { return user ? ('QQ ' + user) : '全部数据'; }
+
+/** 只把非空值写进 query，避免 ?user=null 这类脏参数 */
+function genUserParam() { return state.genUser ? { user: state.genUser } : {}; }
+
+function sendersFromCache() {
+  var d = cache.generateUsers;
+  return (d && d.senders) || [];
+}
+
+function attributionOf() {
+  // 优先用 generate 自带的 attribution（与当前作用域同一次查询），否则退回 users 接口
+  if (cache.generate && cache.generate.attribution) return cache.generate.attribution;
+  if (cache.generateUsers && cache.generateUsers.attribution) return cache.generateUsers.attribution;
+  return null;
+}
+
+/** 当前筛选态标签 */
+function scopeTagHtml() {
+  if (state.genUser) {
+    return '<span class="scope-tag">当前作用域：QQ ' + esc(state.genUser) + '</span>';
+  }
+  return '<span class="scope-tag all">当前作用域：全部数据</span>';
+}
+
+/**
+ * 归属覆盖率提示。这是诚实性提示，必须始终显示：
+ * 按 QQ 筛选只能看到「带发送者归属」的那部分权值。
+ */
+function attributionBannerHtml() {
+  var a = attributionOf();
+  if (!a) {
+    return '<div class="banner">正在读取归属覆盖率（GET /api/generate/users）…</div>';
+  }
+  var total = num(a.total_weight, 0);
+  var attributed = num(a.attributed_weight, 0);
+  var cover = num(a.coverage, 0);
+  var senders = num(a.senders, 0);
+  var pct = (cover * 100).toFixed(1) + '%';
+  // 纯文本（由 banner() 统一转义），避免出现裸露的标签
+  var detail = '按 QQ 筛选仅覆盖 ' + pct + ' 的权值（' + fmtInt(attributed) + ' / ' +
+    fmtInt(total) + '），其余为历史数据、无发送者归属。';
+  if (total <= 0) {
+    return '<div class="banner">该群 total_weight = 0，模型尚未训练出任何转移；按 QQ 筛选同样为空。</div>';
+  }
+  if (attributed <= 0 || cover <= 0) {
+    return '<div class="banner warn"><span class="head">无归属数据：</span>' + esc(detail) +
+      ' 该群暂无带归属的数据，请先让机器人学习新消息或导入带 QQ 号的文本。</div>';
+  }
+  if (cover < 0.9999) {
+    return '<div class="banner warn"><span class="head">归属不完全：</span>' + esc(detail) +
+      ' 涉及 ' + fmtInt(senders) + ' 个 QQ。</div>';
+  }
+  return '<div class="banner ok"><span class="head">归属完整：</span>全部权值都能追溯到发送者（' +
+    esc(fmtInt(attributed)) + ' / ' + esc(fmtInt(total)) + '，' + fmtInt(senders) + ' 个 QQ）。</div>';
+}
+
+/** 作用域下拉框（senders 为空时也不会报错，只显示一项「全部数据」+ 说明） */
+function scopeSelectorHtml() {
+  var senders = sendersFromCache();
+  var html = '<div class="toolbar">' +
+    '<div class="field"><label for="scope-user">作用域（按 QQ 筛选）</label>' +
+      '<select id="scope-user">' +
+        '<option value=""' + (state.genUser ? '' : ' selected') + '>全部数据</option>' +
+        senders.map(function (s) {
+          var uid = String(s.user_id);
+          return '<option value="' + esc(uid) + '"' + (String(state.genUser) === uid ? ' selected' : '') + '>' +
+            esc('QQ ' + uid + ' · 权值 ' + fmtInt(s.weight) + ' · 转移 ' + fmtInt(s.transitions)) + '</option>';
+        }).join('') +
+      '</select>' +
+      '<span class="hint">' + (senders.length
+        ? '共 ' + fmtInt(senders.length) + ' 个有归属的 QQ（按权值降序）'
+        : '该群暂无带归属的 QQ（user_chars 为空）') + '</span>' +
+    '</div>' +
+    '<div class="field"><label>筛选状态</label><div>' + scopeTagHtml() + '</div></div>' +
+    (state.genUser
+      ? '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="scope-clear">清除筛选（回到全部数据）</button></div>'
+      : '') +
+    '</div>';
+  return html;
+}
+
+function wireScopeSelector(group) {
+  var sel = document.getElementById('scope-user');
+  if (sel) {
+    sel.addEventListener('change', function () {
+      setGenUser(group, sel.value || null);
+    });
+  }
+  var clr = document.getElementById('scope-clear');
+  if (clr) clr.addEventListener('click', function () { setGenUser(group, null); });
+}
+
+/** 切换作用域：作废旧的派生缓存，重新拉取并重绘整块 generate 面板 */
+function setGenUser(group, user) {
+  var next = user ? String(user) : null;
+  if (String(next) === String(state.genUser || '')) {
+    // 已经是该作用域（例如清除筛选后重新选择）也要把下拉框同步回去
+    var sel = document.getElementById('scope-user');
+    if (sel) sel.value = next || '';
+    return;
+  }
+  state.genUser = next;
+  state.pair = null;
+  cache.generate = null;
+  cache.pairDetail = null;
+  cache.explore = null;
+  var sl = document.getElementById('scope-user');
+  if (sl) sl.value = next || '';
+  var clr = document.getElementById('scope-clear');
+  if (clr) clr.classList.toggle('hidden', !next);
+  clearError();
+  if (state.page === 'train' && state.trainTab === 'generate') renderTrainBody();
+  refreshTrainData();
+}
+
+/* =========================================================================
+ * 9c. 三级下钻：单条转移详情（GET /api/generate/pair）
+ * ====================================================================== */
+
+function pairKey(first, second) { return String(first) + '\u0000' + String(second); }
+
+function isPairOpen(first, second) {
+  return !!state.pair && state.pair.first === String(first) && state.pair.second === String(second);
+}
+
+/** 表格行通用属性：可点击 + 键盘可达 */
+function rowAttrs(first, second, extraClass) {
+  return ' class="rowlink' + (isPairOpen(first, second) ? ' on' : '') + (extraClass ? ' ' + extraClass : '') +
+    '" tabindex="0" role="button" title="点击查看这条转移的详情"' +
+    ' data-first="' + esc(first) + '" data-second="' + esc(second) + '"';
+}
+
+function wireClickableRows(root) {
+  if (!root) return;
+  Array.prototype.forEach.call(root.querySelectorAll('tr.rowlink'), function (tr) {
+    var open = function () { openPairDetail(state.group, tr.dataset.first, tr.dataset.second); };
+    tr.addEventListener('click', open);
+    tr.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+    });
+  });
+}
+
+function findPairRow(first, second) {
+  var top = (cache.generate && cache.generate.top) || [];
+  for (var i = 0; i < top.length; i++) {
+    if (String(top[i].first) === String(first) && String(top[i].second) === String(second)) return top[i];
+  }
+  return null;
+}
+
+/** 打开 / 收起转移详情。group 省略时用当前选中的群。 */
+function openPairDetail(group, first, second) {
+  var gid = group || state.group;
+  if (!gid) return;
+  var f = String(first === undefined || first === null ? '' : first);
+  var s = String(second === undefined || second === null ? '' : second);
+  if (isPairOpen(f, s)) { closePairDetail(); return; }
+  state.pair = { first: f, second: s };
+  cache.pairDetail = null;
+  var host = document.getElementById('pair-detail-host');
+  if (host) host.innerHTML = '<div class="card"><h2>转移详情</h2><p class="sub">正在加载 GET /api/generate/pair …</p></div>';
+  wireClickableRows(document.getElementById('train-body'));
+  request('GET', '/api/generate/pair', { group: gid, first: f, second: s }).then(function (data) {
+    // 期间用户可能切换了作用域、群或关闭了面板
+    if (!isPairOpen(f, s) || String(gid) !== String(state.group)) return;
+    cache.pairDetail = data;
+    clearError();
+    renderPairDetail();
+  }).catch(function (err) {
+    cache.pairDetail = null;
+    showError(err.message);
+    var h = document.getElementById('pair-detail-host');
+    if (h && isPairOpen(f, s)) {
+      h.innerHTML = '<div class="card"><h2>转移详情</h2>' +
+        '<div class="banner error"><span class="head">加载失败：</span>' + esc(err.message) + '</div>' +
+        '<button type="button" class="btn" id="pair-close2">关闭</button></div>';
+      var c2 = document.getElementById('pair-close2');
+      if (c2) c2.addEventListener('click', closePairDetail);
+    }
+  });
+}
+
+function closePairDetail() {
+  state.pair = null;
+  cache.pairDetail = null;
+  var host = document.getElementById('pair-detail-host');
+  if (host) host.innerHTML = '';
+  wireClickableRows(document.getElementById('train-body'));
+}
+
+function renderPairDetail() {
+  var host = document.getElementById('pair-detail-host');
+  if (!host) return;
+  var d = cache.pairDetail;
+  if (!d || !state.pair) { host.innerHTML = ''; return; }
+
+  var first = d.first === undefined ? state.pair.first : String(d.first);
+  var second = d.second === undefined ? state.pair.second : String(d.second);
+  var w = num(d.weight, 0);
+  var rank = (d.rank === null || d.rank === undefined || !isNum(Number(d.rank))) ? null : Number(d.rank);
+  var totalTrans = num(d.total_transitions, 0);
+  var distinctUsers = num(d.distinct_users, 0);
+  var contributors = d.contributors || [];
+  var fallback = !contributors.length ? findPairRow(first, second) : null;
+
+  var html = '<div class="grid two"><div class="card span-all">';
+  html += '<div class="pair-head">' +
+    '<div class="grow">' +
+      '<div class="pair-title">' + esc(first === '' ? '∅（句首）' : charLabel(first)) +
+        '<span class="arrow">→</span>' + esc(second === '' ? '∅（结束）' : charLabel(second)) +
+        '<span class="u">单条转移详情 · GET /api/generate/pair</span></div>' +
+      '<p class="sub" style="margin:6px 0 0 0">排名按全群聚合模型（chars 表）的权重降序计算，' +
+        '与上方作用域筛选无关；贡献者来自 user_chars 的发送者归属。</p>' +
+    '</div>' +
+    '<div><button type="button" class="btn" id="pair-close">关闭</button></div>' +
+    '</div>';
+
+  html += miniChips([
+    chip('权重 weight', fmtInt(w), ''),
+    chip('占比 share', fmtPct(d.share, 2), ''),
+    chip('排名 rank', rank === null ? '未收录' : ('第 ' + fmtInt(rank) + ' / ' + fmtInt(totalTrans) + ' 名'), ''),
+    chip('贡献者数', fmtInt(distinctUsers), '个 QQ'),
+    chip('归属权值 attributed_weight', fmtInt(d.attributed_weight), '')
+  ]);
+
+  if (rank === null && w <= 0) {
+    html += '<div class="banner warn"><span class="head">未收录：</span>' +
+      '这条转移在当前群的聚合模型里权重为 0，尚未被训练记录。</div>';
+  }
+  if (!contributors.length) {
+    html += '<div class="banner"><span class="head">无归属明细：</span>' +
+      '该转移没有发送者归属记录（历史数据）。' +
+      (fallback ? ' 其权重 ' + fmtInt(w) + '、占比 ' + fmtPct(d.share, 2) + ' 来自未归属的历史语料。' : '') +
+      '</div>';
+  }
+
+  // 贡献者图与表并排
+  html += '<div class="grid two tight" style="margin-bottom:10px">';
+  html += '<div>' +
+    '<div class="section-title">贡献者权重 @ ' + esc(charLabel(first)) + ' → ' + esc(charLabel(second)) +
+    '（' + fmtInt(contributors.length) + ' / ' + fmtInt(distinctUsers) + '）</div>';
+  if (contributors.length) {
+    html += '<canvas id="cv-pair-contrib" class="hoverable" style="width:100%;height:' +
+      Math.max(120, contributors.length * 24 + 48) + 'px;display:block"></canvas>';
+  } else {
+    html += '<p class="empty">该转移没有发送者归属记录（历史数据）</p>';
+  }
+  html += '</div>';
+
+  html += '<div><div class="section-title">贡献者明细</div>' +
+    '<div class="scroll" style="max-height:300px">' +
+    '<table><thead><tr>' +
+    '<th class="r" style="width:40px">#</th><th>QQ 号</th><th class="r">权重 w</th>' +
+    '<th class="r">占该转移</th><th class="r">相对最大</th></tr></thead><tbody>';
+  if (contributors.length) {
+    var maxC = 1;
+    contributors.forEach(function (c) { maxC = Math.max(maxC, num(c.w, 0)); });
+    contributors.forEach(function (c, i) {
+      html += '<tr><td class="r muted">' + (i + 1) + '</td>' +
+        '<td class="mono">' + esc(text(c.user_id)) + '</td>' +
+        '<td class="r">' + fmtInt(c.w) + '</td>' +
+        '<td class="r">' + fmtPct(num(c.w, 0) / Math.max(1, w), 2) + '</td>' +
+        '<td class="r muted">' + fmtPct(num(c.w, 0) / maxC, 1) + '</td></tr>';
+    });
+  } else {
+    html += '<tr><td colspan="5" class="empty">暂无数据</td></tr>';
+  }
+  html += '</tbody></table></div></div></div>';
+
+  html += '<div class="toolbar" style="margin:12px 0 0 0">' +
+    '<button type="button" class="btn" id="pair-adjust">调整此转移权重</button>' +
+    '<span class="hint">会切换到两字模式并自动填入前字 / 后字，跳到权重调整卡片。</span>' +
+    '</div>';
+  html += '</div></div>';
+
+  host.innerHTML = html;
+  var close = document.getElementById('pair-close');
+  if (close) close.addEventListener('click', closePairDetail);
+  var adj = document.getElementById('pair-adjust');
+  if (adj) adj.addEventListener('click', function () { focusAdjustForm(first, second); });
+
+  var cv = document.getElementById('cv-pair-contrib');
+  if (cv) drawContributorChart(cv, contributors, w);
+  wireClickableRows(document.getElementById('train-body'));
+}
+
+/** 贡献者横条图：条色 viridis 映射 w，条尾标「w · 占该转移比例」 */
+function drawContributorChart(canvas, contributors, pairWeight) {
+  if (!contributors || !contributors.length) { return; }
+  var maxW = 1;
+  contributors.forEach(function (c) { maxW = Math.max(maxW, num(c.w, 0)); });
+  drawBarChartH(canvas, {
+    rows: contributors.map(function (c) {
+      return {
+        name: String(c.user_id === undefined || c.user_id === null ? DASH : c.user_id),
+        value: num(c.w, 0),
+        share: num(c.w, 0) / Math.max(1, num(pairWeight, 0))
+      };
+    }),
+    barColor: function (r) { return vmap(r.value, 0, maxW); },
+    labelWidth: 110, valueWidth: 160,
+    xLabel: '权重 w（该 QQ 贡献给这条转移的整数权值）', xMaxLabel: '最大 ' + fmtInt(maxW),
+    rowFont: function (px) { return (px || 11) + 'px "Cascadia Mono",Consolas,"Courier New",monospace'; },
+    rowFontPx: 11.5,
+    valFontPx: 11
+  });
+  overlayRowShares(canvas, contributors.map(function (c) {
+    return { w: c.w, share: num(c.w, 0) / Math.max(1, num(pairWeight, 0)) };
+  }), maxW, { labelWidth: 110, valueWidth: 160 });
+}
+
+/* ------------------------------------------------------ 跳转到权重调整表单 */
+function focusAdjustForm(first, second) {
+  var form = document.getElementById('adj-submit');
+  if (!form) return;
+  var modePair = document.querySelector('input[name="adj-mode"][value="pair"]');
+  if (modePair && !modePair.checked) modePair.click();
+  var f = document.getElementById('adj-first');
+  var s = document.getElementById('adj-second');
+  if (f) f.value = first === '' ? '' : String(first);
+  if (s) s.value = second === '' ? '' : String(second);
+  var card = form.closest ? form.closest('.card') : null;
+  try {
+    (card || form).scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (e) {
+    (card || form).scrollIntoView();
+  }
+  var pc = document.getElementById('adj-percent');
+  if (pc && pc.focus) { try { pc.focus({ preventScroll: true }); } catch (e2) { pc.focus(); } }
+}
+
+function renderTrainBody() {
+  var host = document.getElementById('train-body');
+  if (!host) return;
+  var group = state.group;
+  var html = '';
+  var m = cache.match && String(cache.match.group || group) ? cache.match : null;
+  var g = cacheScopeMatches(cache.generate) ? cache.generate : null;
+  var loading = !!cache.generate && !g;
+
+  if (state.trainTab === 'match') {
+    html += renderMatchPanel(m);
+  } else {
+    html += renderGeneratePanel(g, group);
+  }
+  var kept = keepMessages(['adj-msg', 'ex-msg', 'loop-msg']);
+  cache.loopPlan = null; // Every refreshed list requires a new verified preview.
+  host.innerHTML = html;
+  restoreMessages(kept);
+  bindLoopCard();
+
+  if (state.trainTab === 'match') {
+    drawMatchCharts(m);
+  } else if (g) {
+    wireScopeSelector(group);
+    drawGenerateCharts(g);
+    wireAdjustForm(group);
+    wireExplore(group);
+    // 之前展开的转移详情：数据仍在同一作用域缓存里就直接恢复
+    if (state.pair) {
+      if (cache.pairDetail && String(cache.pairDetail.first) === state.pair.first &&
+          String(cache.pairDetail.second) === state.pair.second) {
+        renderPairDetail();
+      } else {
+        openPairDetail(group, state.pair.first, state.pair.second);
+      }
+    }
+  } else {
+    wireScopeSelector(group);
+    if (loading) {
+      var ph = document.createElement('div');
+      ph.className = 'banner';
+      ph.textContent = '正在按当前作用域重新加载 generate 数据…';
+      host.insertBefore(ph, host.firstChild);
+    }
+  }
+}
+
+/* ---------------------------------------------------------- A. match 面板 */
+function renderMatchPanel(m) {
+  if (!m) return '<div class="card"><h2>match 模型</h2><p class="sub">正在加载 GET /api/match …</p></div>';
+  var pairs = (m.pairs || []).slice(0, 200);
+  var top = m.top_answers || [];
+  var anomalies = m.anomalies || {};
+  var html = '';
+  html += chips([
+    chip('问答对总数 count', fmtInt(m.count), '条'),
+    chip('总权重 weight', fmtInt(m.weight), ''),
+    chip('覆盖答案数', fmtInt(top.length), '个'),
+    chip('中位权重 median', fmtNum(anomalies.median, 3), ''),
+    chip('MAD', fmtNum(anomalies.mad, 3), '')
+  ]);
+
+  // Top 答案图与异常表并排
+  html += '<div class="grid two">';
+  html += '<div class="card">' +
+    '<h2>Top 15 答案权重</h2>' +
+    '<p class="sub">同一答案的多条问答对已合并求和；横轴为权重（整数），条尾标注数值。</p>' +
+    '<canvas id="cv-match-top" style="width:100%;height:' + Math.max(160, top.length * 22 + 40) + 'px;display:block"></canvas>' +
+    '</div>';
+
+  html += '<div class="card">' +
+    '<h2>异常高权重问答对<span class="aux">log10(w) 的稳健 z ≥ 3</span></h2>' +
+    '<p class="sub">判据为 log10 权重的 median/MAD 稳健 z 分数；样本少于 8 条时不判定。</p>';
+  if (anomalies.high && anomalies.high.length) {
+    html += '<div class="scroll" style="max-height:260px"><table>' +
+      '<thead><tr><th>q</th><th>a</th><th class="r">w</th><th class="r">z</th></tr></thead><tbody>' +
+      anomalies.high.map(function (r) {
+        return '<tr><td>' + esc(text(r.q)) + '</td><td>' + esc(text(r.a)) + '</td>' +
+          '<td class="r">' + fmtInt(r.w) + '</td><td class="r z-hi">' + fmtNum(r.z, 2) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  } else {
+    html += '<p class="empty">暂无数据</p>';
+  }
+  html += '</div></div>';
+
+  html += '<div class="grid one"><div class="card">' +
+    '<h2>问答对列表<span class="aux">最多 200 条，按 w 降序</span></h2>' +
+    '<div class="scroll tall"><table>' +
+    '<thead><tr><th class="r" style="width:44px">#</th><th>q（提问）</th><th>a（回答）</th>' +
+    '<th class="r" style="width:70px">w</th><th class="r" style="width:80px">占本群权重</th></tr></thead><tbody>' +
+    (pairs.length ? pairs.map(function (p, i) {
+      return '<tr><td class="r muted">' + (i + 1) + '</td>' +
+        '<td>' + esc(text(p.q)) + '</td><td>' + esc(text(p.a)) + '</td>' +
+        '<td class="r">' + fmtInt(p.w) + '</td>' +
+        '<td class="r muted">' + fmtPct(num(p.w, 0) / Math.max(1, num(m.weight, 1)), 2) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="empty">暂无数据</td></tr>') +
+    '</tbody></table></div></div></div>';
+  return html;
+}
+
+function drawMatchCharts(m) {
+  var cv = document.getElementById('cv-match-top');
+  if (!cv) return;
+  var top = (m && m.top_answers) || [];
+  if (!top.length) { emptyCanvas(cv, '暂无数据'); return; }
+  var maxW = 1;
+  top.forEach(function (r) { maxW = Math.max(maxW, num(r.w, 0)); });
+  drawBarChartH(cv, {
+    rows: top.map(function (r) {
+      return { name: r.a === '' || r.a === null || r.a === undefined ? '（空）' : String(r.a), value: num(r.w, 0) };
+    }),
+    barColor: function (r) { return vmap(r.value, 0, maxW); },
+    labelWidth: 190, valueWidth: 70,
+    xLabel: '权重 w（整数）', xMaxLabel: '最大 ' + fmtInt(maxW), panel: null,
+    rowFontPx: 11.5
+  });
+}
+
+/* ------------------------------------------------------- B. generate 面板 */
+function renderGeneratePanel(g, group) {
+  if (!g) return '<div class="card"><h2>generate 作用域</h2>' +
+    '<p class="sub">正在加载 GET /api/generate …</p></div>';
+  var top = g.top || [];
+  var hist = g.histogram || {};
+  var an = g.anomalies || {};
+  var sumCounts = (hist.counts || []).reduce(function (a, b) { return a + num(b, 0); }, 0);
+  var scoped = state.genUser ? ('QQ ' + state.genUser) : '全部数据';
+  var scopeNote = state.genUser
+    ? '当前按 <b>' + esc(scoped) + '</b> 统计：以下所有指标、直方图、Top 转移与异常值都只来自该 QQ 的归属转移（user_chars）。'
+    : '当前按 <b>全部数据</b> 统计（聚合模型 chars）。';
+
+  var html = '';
+
+  // 作用域选择 + 模型总览：卡片网格第一行
+  html += '<div class="grid two">';
+
+  html += '<div class="card">' +
+    '<div class="card-head"><div class="grow">' +
+      '<h2>作用域</h2>' +
+      '<p class="sub">切换作用域会重新请求 <b>GET /api/generate?group=…&amp;user=…</b>，' +
+      '整块面板的图表随之重绘；QQ 列表来自 <b>GET /api/generate/users</b>。</p>' +
+    '</div></div>' +
+    scopeSelectorHtml() +
+    '<div id="scope-msg">' + attributionBannerHtml() + '</div>' +
+    '</div>';
+
+  html += '<div class="card">' +
+    '<h2>模型总览<span class="aux">' + esc(scoped) + '</span></h2>' +
+    '<p class="sub">转移表 ' + (state.genUser ? 'user_chars（已按 QQ 过滤）' : 'chars（聚合）') +
+    '，字段 first / second / w；结束符以 second = 空串表示。' + scopeNote + '</p>' +
+    miniChips([
+      chip('转移数 transitions', fmtInt(g.transitions), '条'),
+      chip('总权值 total_weight', fmtInt(g.total_weight), ''),
+      chip('首字种类 distinct_first', fmtInt(g.distinct_first), '个'),
+      chip('次字种类 distinct_second', fmtInt(g.distinct_second), '个'),
+      chip('平均权值 mean_weight', fmtNum(g.mean_weight, 2), ''),
+      chip('最大权值 max_weight', fmtInt(g.max_weight), ''),
+      chip('结束符 endings', fmtInt(g.endings), '个')
+    ]) +
+    '</div>';
+  html += '</div>';
+
+  // 数据清理 + 直方图 + Top 转移：三列栅格
+  html += '</div>';
+
+  // 回环预警单独占满一行：它是一张带勾选的表，挤进栅格会看不清
+  html += loopCardHtml(group);
+
+  html += '<div class="grid">';
+  html += purgeCardHtml(group);
+
+  html += '<div class="card">' +
+    '<h2>权重分布直方图</h2>' +
+    '<p class="sub">横轴为 <b>log₁₀(权重)</b>（14 个等宽区间，取区间左边界作为刻度中心），纵轴为落在该区间的<b>转移条数</b>；' +
+    '柱色按柱高取 viridis，共 ' + fmtInt(sumCounts) + ' 条转移入桶（作用域：' + esc(scoped) + '）。' +
+    '稳健统计：median(log₁₀w) = ' + fmtNum(an.median, 3) + '，MAD = ' + fmtNum(an.mad, 3) + '。</p>' +
+    '<canvas id="cv-gen-hist" style="width:100%;height:280px;display:block"></canvas>' +
+    '</div>';
+
+  html += '<div class="card">' +
+    '<h2>Top ' + fmtInt(Math.min(20, top.length)) + ' 高频转移</h2>' +
+    '<p class="sub">first → second；条色按权重取 viridis，条尾标注权重与占比 share。' +
+    '<b>点击任意一条</b>可展开该转移的排名与贡献者详情（GET /api/generate/pair）。' +
+    '作用域：' + esc(scoped) + '。</p>' +
+    '<canvas id="cv-gen-top" class="hoverable" style="width:100%;height:' +
+      Math.max(200, Math.min(20, top.length) * 24 + 48) + 'px;display:block"></canvas>' +
+    '</div>';
+  html += '</div>';
+
+  // 三级下钻的挂载点（点击 Top 转移或后继/先驱表格后填充）
+  html += '<div id="pair-detail-host"></div>';
+
+  // 异常值：两张表并排
+  html += '<div class="grid two"><div class="card span-all">' +
+    '<h2>异常值<span class="aux">log₁₀(权重) 的 median/MAD 稳健 z 分数，阈值 ±3</span></h2>' +
+    '<p class="sub">z = 0.6745·(x − median)/MAD；z ≥ 3 记为异常高（暖色），z ≤ −3 记为异常低（冷色）。' +
+    '样本少于 8 条时不判定。当前 median = <b>' + fmtNum(an.median, 3) + '</b>，MAD = <b>' + fmtNum(an.mad, 3) +
+    '</b>（作用域：' + esc(scoped) + '）。</p>' +
+    '<div class="grid two tight" style="margin-bottom:0">' +
+      anomalyTable('异常高（z ≥ 3）', an.high, 'z-hi') +
+      anomalyTable('异常低（z ≤ −3）', an.low, 'z-lo') +
+    '</div></div></div>';
+
+  // 单字探索：输入条 + 2×2 结果栅格
+  html += '<div class="card">' +
+    '<div class="card-head"><div class="grow">' +
+      '<h2>单字探索</h2>' +
+      '<p class="sub">输入任意内容，提交时取<b>首个字符</b>（支持拼音输入法直接输入），' +
+      '调用 <b>GET /api/generate/explore?group=…&amp;char=…</b>' +
+      (state.genUser ? '（自动带上 <b>user=…</b>）' : '') +
+      '。作用域：' + esc(scoped) + '。结果区不参与定时刷新，切页回来也会保留。</p>' +
+    '</div></div>' +
+    '<div class="toolbar" style="margin-bottom:10px">' +
+      '<div class="field"><label for="ex-char">字符（提交时取首字）</label>' +
+        '<input type="text" id="ex-char" class="w120" placeholder="例如：你" autocomplete="off"></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="ex-go">分析</button></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<span class="hint" id="ex-taken">支持拼音输入法；提交后这里会显示实际使用的字符</span></div>' +
+    '</div>' +
+    '<div id="ex-msg"></div>' +
+    '<div id="explore-host"></div>' +
+    '</div>';
+
+  html += adjustFormHtml(g, group);
+  return html;
+}
+
+/* ------------------------------------------------------------ 数据清理卡片 */
+function loopCardHtml(group) {
+  var d = cache.loops && String(cache.loops.group) === String(group) ? cache.loops : null;
+  var html = '<div class="card" id="loop-card">' +
+    '<h2>强重复记忆清理<span class="aux">先备份 · 再清理</span></h2>' +
+    '<p class="sub">只列出长而明确的连续重复：重复段占语句至少 80%，2–12 字的片段重复至少 4 次且长至少 24 字，' +
+    '或同一非语气字连续至少 16 次。普通笑声、数字、网址及代码不列入。</p>';
+  if (!d) {
+    html += '<p class="sub">正在加载 GET /api/loops …</p></div>';
+    return html;
+  }
+  html += chips([
+    chip('新训练压缩', fmtInt(d.training_repairs || 0), '条'),
+    chip('移除重复字', fmtInt(d.removed_characters || 0), '字'),
+    chip('自动记忆清理', '每 5 分钟', '最多 20 条')
+  ]);
+  var loops = d.loops || [];
+  if (!loops.length) {
+    html += '<div class="banner ok" style="margin-bottom:0"><span class="head">未发现强回环：</span>' +
+      '当前群的记忆语句中没有明显自重复的条目。</div></div>';
+    return html;
+  }
+  html += chips([
+    chip('强回环语句', fmtInt(loops.length), '条'),
+    chip('最多连续重复', fmtInt(Math.max.apply(null, loops.map(function (r) { return r.repeats; }))), '次'),
+    chip('最短周期', fmtInt(Math.min.apply(null, loops.map(function (r) { return r.width; }))), '字')
+  ]);
+  html += '<div class="banner warn"><span class="head">清理范围：</span>' +
+    '删除选中的重复记忆、关联问答和检索链接。历史字符模型没有完整来源记录，' +
+    '因此字符对、三字转移和用户归属权重均保留。执行前会保存可恢复的数据库备份；备份失败则停止清理。</div>';
+  html += '<div class="scroll" style="max-height:300px"><table><thead><tr>' +
+    '<th style="width:36px"><input type="checkbox" id="loop-all" title="全选"></th>' +
+    '<th>语句</th><th class="r">score</th><th class="r">周期</th><th class="r">重复</th>' +
+    '<th class="r">权重</th><th class="r">长度</th></tr></thead><tbody>' +
+    loops.map(function (row) {
+      return '<tr><td><input type="checkbox" class="loop-pick" value="' + esc(String(row.id)) + '"></td>' +
+        '<td class="mono">' + esc(text(row.text)) + '</td>' +
+        '<td class="r">' + fmtNum(row.score, 3) + '</td>' +
+        '<td class="r">' + fmtInt(row.width) + '</td>' +
+        '<td class="r">' + fmtInt(row.repeats) + '</td>' +
+        '<td class="r">' + fmtInt(row.w) + '</td>' +
+        '<td class="r">' + fmtInt(row.length) + '</td></tr>';
+    }).join('') +
+    '</tbody></table></div>';
+  html += '<div class="toolbar" style="margin-top:12px">' +
+    '<button type="button" class="btn" id="loop-preview">预览影响</button>' +
+    '<button type="button" class="btn danger" id="loop-clean" disabled>执行清理</button>' +
+    '<span class="hint">必须先预览；执行前会再次确认</span></div>' +
+    '<div id="loop-plan"></div><div id="loop-msg"></div></div>';
+  return html;
+}
+
+function pickedLoops() {
+  return Array.prototype.filter.call(document.querySelectorAll('.loop-pick'),
+    function (box) { return box.checked; }).map(function (box) { return num(box.value, 0); });
+}
+
+function bindLoopCard() {
+  var card = document.getElementById('loop-card');
+  if (!card) return;
+  var all = document.getElementById('loop-all');
+  if (all) {
+    all.addEventListener('change', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.loop-pick'),
+        function (box) { box.checked = all.checked; });
+      var run = document.getElementById('loop-clean');
+      if (run) run.disabled = true;      // 选择变了，旧预览作废
+      var plan = document.getElementById('loop-plan');
+      if (plan) plan.innerHTML = '';
+      cache.loopPlan = null;
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.loop-pick'), function (box) {
+    box.addEventListener('change', function () {
+      var run = document.getElementById('loop-clean');
+      if (run) run.disabled = true;
+      cache.loopPlan = null;
+    });
+  });
+  var preview = document.getElementById('loop-preview');
+  if (preview) preview.addEventListener('click', previewLoops);
+  var clean = document.getElementById('loop-clean');
+  if (clean) clean.addEventListener('click', cleanLoops);
+}
+
+function previewLoops() {
+  var ids = pickedLoops();
+  var group = String(state.group);
+  if (!ids.length) { showError('请先勾选要清理的语句'); return; }
+  request('POST', '/api/loops/preview', null, { group: group, ids: ids }).then(function (plan) {
+    if (String(state.group) !== group || String(plan.group) !== group ||
+        JSON.stringify(pickedLoops()) !== JSON.stringify(ids)) return;
+    cache.loopPlan = plan;
+    renderLoopPlan(plan);
+    var run = document.getElementById('loop-clean');
+    if (run) run.disabled = false;
+  }).catch(function (err) { showError(err.message); });
+}
+
+function renderLoopPlan(plan) {
+  var host = document.getElementById('loop-plan');
+  if (!host) return;
+  var html = '<div class="section-title">影响预览（只读，尚未改动任何数据）</div>' +
+    chips([
+      chip('将删除记忆', fmtInt(plan.sentences.length), '条'),
+      chip('关联问答', fmtInt(plan.qa_rows), '行'),
+      chip('字符权重改动', '0', ''),
+      chip('执行前备份', '自动', '')
+    ]);
+  if (!plan.changes.length) {
+    html += '<div class="banner"><span class="head">历史权重受保护：</span>' +
+      '清理只影响以上记忆及其相关问答、检索链接。字符对、三字转移和用户归属表均保留。</div>';
+  } else {
+    html += '<div class="scroll" style="max-height:220px"><table><thead><tr>' +
+      '<th>前</th><th>后</th><th class="r">现有</th><th class="r">扣减</th>' +
+      '<th class="r">剩余</th><th>动作</th></tr></thead><tbody>' +
+      plan.changes.map(function (row) {
+        return '<tr><td class="mono">' + esc(charLabel(row.first)) + '</td>' +
+          '<td class="mono">' + esc(charLabel(row.second)) + '</td>' +
+          '<td class="r">' + fmtInt(row.before) + '</td>' +
+          '<td class="r">' + fmtInt(row.subtract) + '</td>' +
+          '<td class="r">' + fmtInt(row.after) + '</td>' +
+          '<td>' + (row.action === 'delete' ? '删除整行' : '仅削减') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  host.innerHTML = html;
+}
+
+function cleanLoops() {
+  var plan = cache.loopPlan;
+  if (!plan) { showError('请先预览影响'); return; }
+  if (String(plan.group) !== String(state.group)) { cache.loopPlan = null; showError('目标群已变化，请重新预览'); return; }
+  var confirmText = '将删除 ' + fmtInt(plan.sentences.length) + ' 条记忆条目，' +
+    '移除相关问答 ' + fmtInt(plan.qa_rows) + ' 行。\n\n' +
+    '字符对、三字转移和用户归属权重保留。执行前会自动备份数据库。确定继续？';
+  if (!window.confirm(confirmText)) return;
+  request('POST', '/api/loops/clean', null,
+    { group: plan.group, ids: plan.sentences.map(function (item) { return item.id; }), plan_token: plan.plan_token }
+  ).then(function (report) {
+    cache.loopPlan = null;
+    var box = String(state.group) === String(report.group) ? document.getElementById('loop-msg') : null;
+    if (box) {
+      banner(box, 'ok', '清理完成：', '删除记忆 ' + fmtInt(report.sentences_removed) +
+        ' 条、相关问答 ' + fmtInt(report.qa_rows_removed) + ' 行；历史字符权重保留。备份：' + report.backup);
+    }
+    refreshTrainData();
+  }).catch(function (err) { showError(err.message); });
+}
+
+function purgeCardHtml(group) {
+  var d = cache.nonChinese;
+  var html = '<div class="card" id="purge-card">' +
+    '<h2>非中文转移<span class="aux">保留未计入</span></h2>' +
+    '<p class="sub">generate 只把<b>中文字符之间</b>的相邻对计入模型：英文、数字、标点、符号、空格与 emoji ' +
+    '既不写入模型，也不参与生成，更不会作为生成起点。历史数据里已经存在的非中文转移' +
+    '<b>全部保留在库中、不做任何删除</b>，但生成时会被整条跳过，因此不会影响回复。</p>';
+  if (!d) {
+    html += '<p class="sub">正在加载 GET /api/generate/non_chinese …</p></div>';
+    return html;
+  }
+  var rows = num(d.rows, 0), weight = num(d.weight, 0);
+  var totalRows = num(d.total_rows, 0), totalWeight = num(d.total_weight, 0);
+  var rowPct = totalRows ? rows / totalRows : 0;
+  var weightPct = num(d.weight_share, totalWeight ? weight / totalWeight : 0);
+  var samples = d.samples || [];
+
+  html += '<div class="mini-chips">' +
+    chip('非中文转移', fmtInt(rows), '条') +
+    chip('占总转移', fmtPct(rowPct, 2), '') +
+    chip('占用权值', fmtInt(weight), '') +
+    chip('占总权值', fmtPct(weightPct, 2), '') +
+    '</div>';
+
+  // 占比条（细、单色、中性，科研风格）
+  html += '<div class="dist" title="非中文转移占总转移的比例"><span style="width:' +
+    (Math.min(1, rowPct) * 100).toFixed(2) + '%;background:#7a7a7a"></span></div>' +
+    '<div class="muted" style="font-size:11px;margin:4px 0 10px 0">' + fmtInt(rows) + ' / ' + fmtInt(totalRows) +
+    ' 条转移为非中文（' + fmtPct(rowPct, 2) + '）</div>';
+
+  if (rows <= 0) {
+    html += '<div class="banner ok" style="margin-bottom:0"><span class="head">全部为中文：</span>' +
+      '当前群没有任何非中文转移。</div></div>';
+    return html;
+  }
+
+  html += '<p class="muted" style="font-size:12px;margin:0 0 10px 0">' +
+    '这些行仍然占用 ' + fmtInt(weight) + ' 权值（' + fmtPct(weightPct, 2) + '）：模型照常学习并' +
+    '使用它们（回复需要标点），只是本页图表按「只计中文」的口径排除了它们，' +
+    '以免英文、数字与符号干扰对中文搭配的观察。数据保留，无需也无法在此删除。</p>';
+
+  html += '<div class="section-title">示例（前 ' + fmtInt(Math.min(samples.length, 8)) + ' 条）</div>';
+  html += '<div class="scroll" style="max-height:170px"><table><thead><tr>' +
+    '<th>first</th><th>second</th><th class="r">w</th></tr></thead><tbody>' +
+    (samples.length ? samples.slice(0, 8).map(function (s) {
+      return '<tr><td class="mono">' + esc(charLabel(s.first)) + '</td>' +
+        '<td class="mono">' + esc(charLabel(s.second)) + '</td>' +
+        '<td class="r">' + fmtInt(s.w) + '</td></tr>';
+    }).join('') : '<tr><td colspan="3" class="empty">暂无样例</td></tr>') +
+    '</tbody></table></div></div>';
+  return html;
+}
+
+/** 把不可见字符显示成可读形式（空格 / 换行 / 制表符等） */
+function charLabel(ch) {
+  if (ch === undefined || ch === null || ch === '') return '∅';
+  var s = String(ch);
+  return s.replace(/[\s]/g, function (m) {
+    return m === '\n' ? '⏎' : (m === '\t' ? '⇥' : (m === ' ' ? '␣' : '␠'));
+  });
+}
+
+function anomalyTable(title, rows, cls) {
+  var list = rows || [];
+  return '<div>' +
+    '<div class="section-title" style="margin-top:6px">' + esc(title) + '（' + fmtInt(list.length) + '）</div>' +
+    '<div class="scroll" style="max-height:250px"><table><thead><tr>' +
+    '<th>first</th><th>second</th><th class="r">w</th><th class="r">share</th><th class="r">z</th>' +
+    '</tr></thead><tbody>' +
+    (list.length ? list.map(function (r) {
+      return '<tr><td>' + esc(r.first === '' ? '（空）' : text(r.first)) + '</td>' +
+        '<td>' + esc(r.second === '' ? '∅ 结束' : text(r.second)) + '</td>' +
+        '<td class="r">' + fmtInt(r.w) + '</td>' +
+        '<td class="r">' + fmtPct(r.share, 3) + '</td>' +
+        '<td class="r ' + cls + '">' + fmtNum(r.z, 2) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="empty">暂无数据</td></tr>') +
+    '</tbody></table></div></div>';
+}
+
+function drawGenerateCharts(g) {
+  var histCv = document.getElementById('cv-gen-hist');
+  if (histCv) drawHistogram(histCv, (g && g.histogram) || null, null);
+  var topCv = document.getElementById('cv-gen-top');
+  if (!topCv) return;
+  var top = ((g && g.top) || []).slice(0, 20);
+  if (!top.length) {
+    topCv.onclick = null;
+    topCv.__hbarDraw = null;
+    topCv.__geo = null;
+    emptyCanvas(topCv, '暂无数据');
+    return;
+  }
+  // 供悬停/点击命中测试与自动化检查读取的当前行集合
+  topCv.__rows = top;
+  var maxW = 1;
+  top.forEach(function (r) { maxW = Math.max(maxW, num(r.w, 0)); });
+  var rows = top.map(function (r) {
+    var f = r.first === '' ? '∅' : String(r.first);
+    var s = r.second === '' ? '∅结束' : String(r.second);
+    return { name: f + ' → ' + s, value: num(r.w, 0), share: num(r.share, 0), first: r.first, second: r.second };
+  });
+  var opt = {
+    rows: rows,
+    barColor: function (r) { return vmap(r.value, 0, maxW); },
+    labelWidth: 170, valueWidth: 150,
+    xLabel: '权重 w（整数）', xMaxLabel: '最大 ' + fmtInt(maxW),
+    valFontPx: 11,
+    rowFontPx: 12
+  };
+  var hoverIndex = -1;
+  var drawAll = function () {
+    var geo = drawBarChartH(topCv, opt);
+    overlayShares(topCv, top, maxW);
+    if (hoverIndex >= 0 && hoverIndex < rows.length && geo) {
+      paintHBarHover(topCv, rows, geo, hoverIndex, opt);
+    }
+    return geo;
+  };
+  topCv.__hbarDraw = drawAll;
+  var geo0 = drawAll();
+
+  // 鼠标悬停高亮（手型 + 整行浅底）
+  if (topCv.dataset.genTopHover !== '1') {
+    topCv.dataset.genTopHover = '1';
+    topCv.addEventListener('mousemove', function (ev) {
+      var rect = topCv.getBoundingClientRect();
+      var geo = topCv.__geo;
+      if (!geo) return;
+      var idx = Math.floor((ev.clientY - rect.top - geo.top) / geo.rowH);
+      if (idx < 0 || idx >= rows.length) idx = -1;
+      if (idx === hoverIndex) return;
+      hoverIndex = idx;
+      drawAll();
+    });
+    topCv.addEventListener('mouseleave', function () {
+      if (hoverIndex === -1) return;
+      hoverIndex = -1;
+      drawAll();
+    });
+  } else {
+    hoverIndex = -1;
+  }
+  topCv.__geo = geo0;
+
+  // 点击某一条 → 下钻到该转移详情
+  topCv.onclick = function (ev) {
+    var rect = topCv.getBoundingClientRect();
+    var geo = topCv.__geo;
+    if (!geo) return;
+    var idx = Math.floor((ev.clientY - rect.top - geo.top) / geo.rowH);
+    if (idx < 0 || idx >= rows.length) return;
+    openPairDetail(state.group, rows[idx].first, rows[idx].second);
+  };
+}
+
+/** Top 转移条尾的「w（share%）」标注 */
+function overlayShares(canvas, rows, maxW) {
+  overlayRowShares(canvas, rows, maxW, { labelWidth: 170, valueWidth: 150 });
+}
+
+/** 在横条条尾补写「w  share%」（依赖 drawBarChartH 的几何约定） */
+function overlayRowShares(canvas, rows, maxW, opt) {
+  var o = opt || {};
+  var padL = num(o.labelWidth, 170), padR = num(o.valueWidth, 150);
+  var rect = canvas.getBoundingClientRect();
+  var w = Math.round(rect.width), h = Math.round(rect.height);
+  if (!w || !h || !rows.length) return;
+  var ctx = canvas.getContext('2d');
+  ctx.save();
+  ctx.font = tickFont(11);
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  var top = 8, bottom = h - 26;
+  var rowH = Math.max(9, (bottom - top) / rows.length);
+  var barH = Math.min(18, rowH * 0.7);
+  var L = padL, R = w - padR;
+  rows.forEach(function (r, i) {
+    var y = top + i * rowH + (rowH - barH) / 2;
+    var bw = num(r.w, 0) / maxW * (R - L);
+    var x = L + Math.max(bw, 0.8) + 6;
+    ctx.fillStyle = INK;
+    ctx.fillText(fmtInt(r.w) + '  ' + fmtPct(r.share, 2), x, y + barH / 2);
+  });
+  ctx.restore();
+}
+
+/* --------------------------------------------------------- 权重调整表单 */
+function adjustFormHtml(g, group) {
+  var total = num(g && g.total_weight, 0);
+  return '<div class="grid one"><div class="card" id="adj-card">' +
+    '<h2>权重调整<span class="aux">POST /api/generate/adjust</span></h2>' +
+    '<p class="sub">调整幅度按<b>当前模型总权值的百分比</b>计算：delta = round(总权值 × percent ÷ 100)。' +
+    '增加时若 delta &lt; 1 会被后端抬到 1；削减时权重降到 0 及以下的转移会被<b>直接删除</b>。' +
+    '该接口写的是全群聚合表 <b>chars</b>，与作用域筛选无关。</p>' +
+    (state.genUser
+      ? '<div class="banner warn" id="adj-scope-note"><span class="head">作用域提示：</span>' +
+        '当前处于 <b>QQ ' + esc(state.genUser) + '</b> 筛选态，但「权重调整作用于整个群的聚合模型，与当前 QQ 筛选无关」；' +
+        '提交后的 delta 按 <b>全群</b> total_weight 计算。</div>'
+      : '') +
+    // 表单拆成两行网格，避免长表单把卡片撑得很高
+    '<div class="toolbar" style="margin-bottom:10px">' +
+      '<div class="field"><label>模式 mode</label>' +
+        '<div class="radios">' +
+          '<label><input type="radio" name="adj-mode" value="pair" checked>两字（前-后）</label>' +
+          '<label><input type="radio" name="adj-mode" value="sentence">整句（每相邻两字）</label>' +
+        '</div></div>' +
+      '<div class="field"><label>方向 direction</label>' +
+        '<div class="radios">' +
+          '<label><input type="radio" name="adj-dir" value="add" checked>增加</label>' +
+          '<label><input type="radio" name="adj-dir" value="reduce">削减</label>' +
+        '</div></div>' +
+      '<div class="field"><label for="adj-percent">百分比 percent（0–100，可小数）</label>' +
+        '<input type="number" id="adj-percent" class="w90" min="0.01" max="100" step="0.1" value="0.5">' +
+        '<span class="hint">按当前模型总权值的百分比计算</span></div>' +
+    '</div>' +
+    '<div class="toolbar" id="adj-pair-row" style="margin-bottom:10px">' +
+      '<div class="field"><label for="adj-first">前字 first</label>' +
+        '<input type="text" id="adj-first" class="w120" placeholder="例如：你" autocomplete="off"></div>' +
+      '<div class="field"><label for="adj-second">后字 second</label>' +
+        '<input type="text" id="adj-second" class="w120" placeholder="例如：好" autocomplete="off"></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="adj-submit">提交调整</button></div>' +
+    '</div>' +
+    '<div class="toolbar hidden" id="adj-sentence-row" style="margin-bottom:10px">' +
+      '<div class="field"><label for="adj-sentence">整句 sentence（至少 2 个字符）</label>' +
+        '<textarea id="adj-sentence" placeholder="今天天气不错" autocomplete="off"></textarea></div>' +
+      '<div class="field"><label>&nbsp;</label>' +
+        '<button type="button" class="btn" id="adj-submit-2">提交调整</button></div>' +
+    '</div>' +
+    '<p class="hint" id="adj-preview">当前群 total_weight = <b>' + fmtInt(total) + '</b>；' +
+      'percent = <b>0.5</b> → delta ≈ <b>' + fmtInt(Math.round(total * 0.005)) + '</b> 权值。</p>' +
+    '<div id="adj-msg"></div>' +
+    '</div></div>';
+}
+
+function wireAdjustForm(group) {
+  var modeInputs = document.querySelectorAll('input[name="adj-mode"]');
+  var pairRow = document.getElementById('adj-pair-row');
+  var sentRow = document.getElementById('adj-sentence-row');
+  var percent = document.getElementById('adj-percent');
+  var preview = document.getElementById('adj-preview');
+  var g = cache.generate || {};
+  var total = num(g.total_weight, 0);
+
+  function currentMode() {
+    var v = 'pair';
+    Array.prototype.forEach.call(modeInputs, function (i) { if (i.checked) v = i.value; });
+    return v;
+  }
+  function updatePreview() {
+    var p = parseFloat(percent.value);
+    if (!isFinite(p)) p = 0;
+    var delta = Math.round(total * p / 100);
+    preview.innerHTML = '当前群 total_weight = <b>' + fmtInt(total) + '</b>；percent = <b>' + esc(fmtNum(p, 3)) +
+      '</b> → delta ≈ <b>' + fmtInt(delta) + '</b> 权值。' +
+      (p <= 0 ? ' <span class="z-hi">percent 必须大于 0。</span>' : '');
+  }
+  Array.prototype.forEach.call(modeInputs, function (i) {
+    i.addEventListener('change', function () {
+      var pair = currentMode() === 'pair';
+      pairRow.classList.toggle('hidden', !pair);
+      sentRow.classList.toggle('hidden', pair);
+    });
+  });
+  percent.addEventListener('input', updatePreview);
+  updatePreview();
+
+  var btn2 = document.getElementById('adj-submit-2');
+  var btn = document.getElementById('adj-submit') || btn2;
+  if (!btn) return;
+  var doSubmit = function () {
+    var mode = currentMode();
+    var dir = 'add';
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="adj-dir"]'), function (i) { if (i.checked) dir = i.value; });
+    var p = parseFloat(percent.value);
+    var msg = document.getElementById('adj-msg');
+    if (!isFinite(p) || p <= 0 || p > 100) {
+      banner(msg, 'error', '参数无效：', 'percent 必须在 0–100 之间（不含 0）'); return;
+    }
+    var body = { group: group, mode: mode, direction: dir, percent: p };
+    if (mode === 'pair') {
+      var f = (document.getElementById('adj-first').value || '').trim();
+      var s = (document.getElementById('adj-second').value || '').trim();
+      if (!f || !s) { banner(msg, 'error', '参数无效：', '两字模式请填写前字与后字'); return; }
+      body.first = f; body.second = s;
+    } else {
+      var sentence = (document.getElementById('adj-sentence').value || '').trim();
+      if (sentence.length < 2) { banner(msg, 'error', '参数无效：', '整句模式至少需要 2 个字符'); return; }
+      body.sentence = sentence;
+    }
+    btn.disabled = true; btn.textContent = '提交中…';
+    if (btn2) { btn2.disabled = true; btn2.textContent = '提交中…'; }
+    request('POST', '/api/generate/adjust', null, body).then(function (data) {
+      clearError();
+      var r = data.report || {};
+      banner(msg, 'ok', '调整成功：',
+        '实际生效 ' + fmtInt(r.applied) + ' 条，删除 ' + fmtInt(r.deleted) + ' 条，' +
+        'delta = ' + fmtInt(r.delta) + '（实际增减的权重绝对值，低于 0 的转移已被删除）；' +
+        '总权值 ' + fmtInt(r.total_before) + ' → ' + fmtInt(r.total_after) + '。' +
+        (state.genUser
+          ? ' 注意：权重调整作用于整个群的聚合模型（chars 表），与当前 QQ ' + state.genUser + ' 筛选无关。'
+          : ''));
+      // 聚合表变了，下钻详情与两种作用域的 generate 缓存都要刷新
+      cache.generate = null;
+      if (state.pair) openPairDetail(group, state.pair.first, state.pair.second);
+      refreshGeneratePanel(group);
+    }).catch(function (err) {
+      showError(err.message);
+      banner(msg, 'error', '调整失败：', err.message);
+    }).then(function () {
+      btn.disabled = false; btn.textContent = '提交调整';
+      if (btn2) { btn2.disabled = false; btn2.textContent = '提交调整'; }
+    });
+  };
+  btn.addEventListener('click', doSubmit);
+  if (btn2) btn2.addEventListener('click', doSubmit);
+  // 两字输入支持 Enter 提交；IME 组合中不提交、不截断
+  bindSubmitInput(document.getElementById('adj-first'), doSubmit);
+  bindSubmitInput(document.getElementById('adj-second'), doSubmit);
+  bindSubmitInput(document.getElementById('adj-sentence'), function (ev) {
+    // 文本域里回车换行是合法输入，只有 Ctrl/Cmd+Enter 才提交
+    if (ev && (ev.ctrlKey || ev.metaKey)) doSubmit();
+  });
+}
+
+function refreshGeneratePanel(group) {
+  // 先记下刚显示的提示条，重新渲染后再贴回去，保证用户看得到结果
+  var kept = keepMessages(['adj-msg']);
+  var query = { group: group };
+  Object.keys(genUserParam()).forEach(function (k) { query[k] = genUserParam()[k]; });
+  var tasks = [
+    get('generate', '/api/generate', query),
+    get('generateUsers', '/api/generate/users', { group: group })
+  ];
+  return Promise.all(tasks.map(function (p) { return p.catch(function (err) { showError(err.message); }); }))
+    .then(function () {
+      if (state.page === 'train' && state.trainTab === 'generate') {
+        renderTrainBody();
+        restoreMessages(kept);
+      }
+    });
+}
+
+/* ------------------------------------------------------------ 单字探索 */
+function wireExplore(group) {
+  var btn = document.getElementById('ex-go');
+  if (!btn) return;
+  var input = document.getElementById('ex-char');
+  var host = document.getElementById('explore-host');
+  var msg = document.getElementById('ex-msg');
+
+  function run() {
+    var raw = String(input.value || '');
+    if (!raw.trim()) { banner(msg, 'error', '请输入内容', '可以是单个字，也可以是拼音输入法打出的任意文本'); return; }
+    // 提交时才取首字：用 Array.from 处理代理对（emoji / 生僻字），绝不在 input 事件里截断
+    var chars = Array.from(raw.trim());
+    var ch = chars[0] || '';
+    if (chars.length > 1) input.value = ch;
+    var taken = document.getElementById('ex-taken');
+    if (taken) taken.innerHTML = '已取首字：<b>' + esc(ch) + '</b>' +
+      (chars.length > 1 ? '（输入 ' + fmtInt(chars.length) + ' 个字符，其余已忽略）' : '');
+    btn.disabled = true; btn.textContent = '分析中…';
+    host.innerHTML = '<p class="sub">正在加载探索数据…</p>';
+    var query = { group: group, char: ch };
+    Object.keys(genUserParam()).forEach(function (k) { query[k] = genUserParam()[k]; });
+    get('explore', '/api/generate/explore', query).then(function () {
+      clearError();
+      msg.innerHTML = '';
+      renderExplore();
+    }).catch(function (err) {
+      showError(err.message);
+      banner(msg, 'error', '分析失败：', err.message);
+      host.innerHTML = '';
+    }).then(function () { btn.disabled = false; btn.textContent = '分析'; });
+  }
+  btn.addEventListener('click', run);
+  // IME 安全：组合中回车不提交，组合结束后也不主动触发分析
+  bindSubmitInput(input, run);
+
+  // 作用域变化后旧的探索结果已失效，不再自动重放
+  if (cache.explore && cacheScopeMatches(cache.explore) &&
+      String(cache.explore.char) === String(input.value || '')) renderExplore();
+}
+
+function renderExplore() {
+  var host = document.getElementById('explore-host');
+  if (!host) return;
+  var d = cache.explore;
+  if (!d) { host.innerHTML = ''; return; }
+  var succ = d.successors || [], pred = d.predecessors || [];
+  var scoped = state.genUser ? ('QQ ' + state.genUser) : '全部数据';
+  var an = d.anomalies || {};
+  var succAn = {};
+  (an.successors && an.successors.high ? an.successors.high : []).forEach(function (r) { succAn[r.second] = r.z; });
+  (an.successors && an.successors.low ? an.successors.low : []).forEach(function (r) { succAn[r.second] = r.z; });
+  var predAn = {};
+  (an.predecessors && an.predecessors.high ? an.predecessors.high : []).forEach(function (r) { predAn[r.first] = r.z; });
+  (an.predecessors && an.predecessors.low ? an.predecessors.low : []).forEach(function (r) { predAn[r.first] = r.z; });
+
+  var html = '';
+  html += chips([
+    chip('目标字符', text(d.char), ''),
+    chip('出边总权值 out_total', fmtInt(d.out_total), ''),
+    chip('入边总权值 in_total', fmtInt(d.in_total), ''),
+    chip('分布熵 H', fmtNum(d.distribution_entropy, 4), 'bit'),
+    chip('有效后继数 2^H', fmtNum(d.effective_support, 2), '个'),
+    chip('80% 覆盖', (d.concentration && d.concentration.top80)
+      ? ('前 ' + fmtInt(d.concentration.top80) + ' 种') : '—', ''),
+    chip('作用域', scoped, ''),
+    chip('后继 / 先驱种类', fmtInt(succ.length) + ' / ' + fmtInt(pred.length), '')
+  ]);
+
+  // 两张结构图在上、两张分布图在下，每行两张（够宽，不会被挤成竖条）
+  html += '<div class="grid two tight">';
+
+  html += '<div class="card dense">' +
+    '<h2>P×S matrix<span class="aux">前驱 × 后继权重</span></h2>' +
+    '<p class="sub">行 = 目标字与前驱（' + fmtInt(pred.length) + '），列 = 后继（' + fmtInt(succ.length) +
+    '）；格内数字为权重，颜色为 viridis 映射。</p>' +
+    '<canvas id="cv-ex-heat" style="width:100%;height:330px;display:block"></canvas>' +
+    '</div>';
+
+  html += '<div class="card dense">' +
+    '<h2>Network<span class="aux">转移网络</span></h2>' +
+    '<p class="sub">中心为目标字，左侧前驱、右侧后继；节点半径 ∝ √w，连线粗细 ∝ w。</p>' +
+    '<canvas id="cv-ex-net" style="width:100%;height:330px;display:block"></canvas>' +
+    '</div>';
+
+  html += '<div class="card dense">' +
+    '<h2>Zipf<span class="aux">排名–权重（log-log）</span></h2>' +
+    '<p class="sub">越接近虚线（端点连线）越接近幂律。</p>' +
+    '<canvas id="cv-ex-zipf" style="width:100%;height:280px;display:block"></canvas>' +
+    '</div>';
+
+  html += '<div class="card dense">' +
+    '<h2>Lift<span class="aux">富集倍数</span></h2>' +
+    '<p class="sub">lift 明显大于 1 = 该字特有搭配；≈1 = 只是全群高频字。</p>' +
+    '<canvas id="cv-ex-lift" style="width:100%;height:280px;display:block"></canvas>' +
+    '</div>';
+
+  html += '</div>';
+
+  html += '<div class="grid two tight" style="margin-top:16px">';
+  html += listTable('后继列表（' + text(d.char) + ' → ?）', succ.map(function (r) {
+    return { ch: r.second, w: r.w, share: r.share, z: succAn[r.second], first: d.char, second: r.second };
+  }), '后继');
+
+  html += listTable('先驱列表（? → ' + text(d.char) + '）', pred.map(function (r) {
+    return { ch: r.first, w: r.w, share: r.share, z: predAn[r.first], first: r.first, second: d.char };
+  }), '先驱');
+
+  html += '</div>';
+  host.innerHTML = html;
+
+  var heat = document.getElementById('cv-ex-heat');
+  if (heat) drawHeatmap(heat, d.heatmap);
+  var net = document.getElementById('cv-ex-net');
+  if (net) drawNetwork(net, d.graph, d.char);
+  var zipf = document.getElementById('cv-ex-zipf');
+  if (zipf) drawRankAbundance(zipf, succ);
+  var lift = document.getElementById('cv-ex-lift');
+  if (lift) drawLiftChart(lift, succ);
+  // 表格行可点击 → 三级下钻
+  Array.prototype.forEach.call(host.querySelectorAll('tr.rowlink'), function (tr) {
+    var open = function () { openPairDetail(state.group, tr.dataset.first, tr.dataset.second); };
+    tr.addEventListener('click', open);
+    tr.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+    });
+  });
+}
+
+function listTable(title, rows, chLabel) {
+  return '<div class="card dense">' +
+    '<h2>' + esc(title) + '<span class="aux">' + fmtInt(rows.length) + ' 条</span></h2>' +
+    '<p class="sub">占比 share 相对该方向的权值总和；z 为 log10(w) 的 median/MAD 稳健 z 分数（阈值 ±3）。' +
+    '<b>点击任意一行</b>可查看这条转移的排名与贡献者。</p>' +
+    '<div class="scroll" style="max-height:300px"><table><thead><tr>' +
+    '<th>' + esc(chLabel) + '</th><th class="r">权重 w</th><th class="r">占比 share</th><th class="r">z</th>' +
+    '</tr></thead><tbody>' +
+    (rows.length ? rows.map(function (r) {
+      var zCls = isNum(r.z) ? (r.z >= 3 ? 'z-hi' : (r.z <= -3 ? 'z-lo' : '')) : '';
+      var canDrill = r.first !== undefined && r.second !== undefined;
+      return '<tr' + (canDrill ? rowAttrs(r.first, r.second) : '') + '>' +
+        '<td' + (canDrill ? ' class="drillcell"' : '') + '>' + esc(r.ch === '' ? '∅ 结束' : charLabel(r.ch)) + '</td>' +
+        '<td class="r">' + fmtInt(r.w) + '</td>' +
+        '<td class="r">' + fmtPct(r.share, 2) + '</td>' +
+        '<td class="r ' + zCls + '">' + (isNum(r.z) ? fmtNum(r.z, 2) : DASH) + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty">暂无数据</td></tr>') +
+    '</tbody></table></div></div>';
+}
+
+/* =========================================================================
+ * 10. 页面：门禁管理
+ * ====================================================================== */
+function renderDict() {
+  var sec = currentSection();
+  var d = cache.dict;
+  if (!d) {
+    sec.innerHTML = '<div class="card"><h2>门禁管理</h2><p class="sub">正在加载门禁项目…</p></div>';
+    return;
+  }
+  var gates = d.gates || [];
+  var subtypes = gates.reduce(function (sum, gate) { return sum + (gate.subtypes || []).length; }, 0);
+  var pending = gates.reduce(function (sum, gate) { return sum + num(gate.pending, 0); }, 0);
+  var html = '<div class="page-intro"><h1>门禁管理</h1>' +
+    '<p>按 00–07 查看当前规则、细分类别、人工审核建议与待审数量。此页为只读规则总览，审批请到“用户质量分”。</p></div>' +
+    chips([chip('门禁项目', fmtInt(gates.length), '项'),
+           chip('细分类别', fmtInt(subtypes), '类'),
+           chip('待审报告', fmtInt(pending), '份'),
+           chip('规则版本', text(d.version), '')]);
+  html += '<div class="banner warn"><span class="head">处理原则：</span>' +
+    '00 始终静默。轻微命中只在后台处理；建议扣分与短封禁须人工批准，不能把建议值当作自动处罚。</div>';
+  html += '<div class="grid two">' + gates.map(function (gate) {
+    var parts = gate.subtypes || [];
+    return '<div class="card"><div class="card-head"><div class="grow"><h2>' +
+      esc(gate.number) + ' · ' + esc(gate.name) + '</h2><p class="sub">' +
+      esc(gate.description) + '</p></div><span class="tag">待审 ' +
+      fmtInt(gate.pending) + '</span></div><p class="hint">提醒：' +
+      esc(gate.notification) + '</p><div class="scroll"><table><thead><tr>' +
+      '<th>分类</th><th>判定项目</th><th>模式</th><th class="r">建议扣分</th><th class="r">可选封禁</th>' +
+      '</tr></thead><tbody>' + parts.map(function (item) {
+        return '<tr><td class="mono">' + esc(item.code) + '</td><td>' +
+          esc(item.label) + '</td><td>' +
+          (item.mode === 'enforce' ? '生效' : '观察') + '</td><td class="r">' +
+          (item.points === null ? '—' : fmtInt(item.points)) + '</td><td class="r">' +
+          (item.ban_seconds === null ? '—' : fmtInt(item.ban_seconds) + ' 秒') +
+          '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      (gate.number === '02' ? '<details><summary>查看敏感词分级与排除词</summary>' +
+        '<div class="scroll tall"><table><thead><tr><th>等级</th><th>词条</th></tr></thead><tbody>' +
+        parts.map(function (item) {
+          return '<tr><td class="mono">' + esc(item.code) + '</td><td>' +
+            (item.terms || []).map(function (term) { return '<span class="tag">' + esc(term) + '</span>'; }).join('') +
+            '</td></tr>';
+        }).join('') + '</tbody></table></div><p class="hint">排除词组：</p>' +
+        (d.safe_terms || []).map(function (term) { return '<span class="tag">' + esc(term) + '</span>'; }).join('') +
+        '</details>' : '') + '</div>';
+  }).join('') + '</div>';
+  html += '<div class="grid one"><div class="card"><h2>生成出站守卫</h2>' +
+    '<p class="sub">以下字符对封禁属于模型输出守卫，与用户 00–07 门禁独立。</p></div></div>' +
+    pairBanCardHtml();
+  sec.innerHTML = html;
+  bindPairBanCard();
+}
+
+/* ---- 输出封禁对（prev, next）---------------------------------------------
+   命中该相邻两字时，机器人截断生成并放弃整条回复。按群独立存储，因此卡片
+   自带群选择器；只过滤模型生成的内容，系统固定提示不受影响。 */
+function pbGroup() {
+  var select = document.getElementById('pb-group');
+  if (select && select.value) return select.value;
+  if (state.pbGroup) return state.pbGroup;
+  if (state.group) return state.group;
+  var groups = (cache.overview && cache.overview.groups) || [];
+  return groups.length ? groups[0].group : null;
+}
+
+function pairBanCardHtml() {
+  var groups = (cache.overview && cache.overview.groups) || [];
+  var html = '<div class="card" id="pb-card">' +
+    '<h2>Pair bans<span class="aux">输出封禁对 · 按群独立</span></h2>' +
+    '<p class="sub">当生成结果中出现下列相邻两字 <code>(prev, next)</code> 时，机器人会<b>立即截断生成并放弃这条回复</b>，' +
+    '不发送任何内容。该守卫位于<b>出站路径</b>，因此被禁的字符对不可能被发出去。' +
+    '只作用于模型生成的回复；封禁通知、<code>/apply</code> 等系统提示是固定文本，不受影响。</p>';
+  if (!groups.length) {
+    return html + '<p class="sub">正在加载群列表…</p></div>';
+  }
+  var options = groups.map(function (item) {
+    var selected = String(item.group) === String(pbGroup()) ? ' selected' : '';
+    return '<option value="' + esc(item.group) + '"' + selected + '>' +
+      esc(item.label || item.group) + '</option>';
+  }).join('');
+  html += '<div class="toolbar">' +
+    '<select id="pb-group">' + options + '</select>' +
+    '<input type="text" id="pb-first" class="c1" placeholder="前字">' +
+    '<input type="text" id="pb-second" class="c1" placeholder="后字">' +
+    '<input type="text" id="pb-reason" placeholder="原因（可选）">' +
+    '<button type="button" class="btn" id="pb-add">添加封禁对</button></div>' +
+    '<div id="pb-msg"></div><div id="pb-list"></div></div>';
+  return html;
+}
+
+function loadPairBans() {
+  var host = document.getElementById('pb-list');
+  var group = pbGroup();
+  if (!host || !group) return;
+  host.innerHTML = '<p class="sub">正在加载…</p>';
+  request('GET', '/api/pairbans', { group: group }).then(function (data) {
+    if (!document.getElementById('pb-list')) return;
+    renderPairBans(data);
+  }).catch(function (err) {
+    host.innerHTML = '';
+    banner(host, 'error', '加载封禁对失败：', err.message);
+  });
+}
+
+function renderPairBans(data) {
+  var host = document.getElementById('pb-list');
+  if (!host) return;
+  var bans = data.bans || [];
+  if (!bans.length) {
+    host.innerHTML = '<div class="banner ok" style="margin-bottom:0"><span class="head">暂无封禁对：</span>' +
+      '该群的生成结果不做任何两字级别的出站拦截。</div>';
+    return;
+  }
+  host.innerHTML = '<div class="scroll" style="max-height:280px"><table><thead><tr>' +
+    '<th>前字</th><th>后字</th><th class="r">该对权重</th><th>原因</th><th>添加时间</th><th></th>' +
+    '</tr></thead><tbody>' + bans.map(function (row) {
+      return '<tr><td class="mono">' + esc(charLabel(row.first)) + '</td>' +
+        '<td class="mono">' + esc(charLabel(row.second)) + '</td>' +
+        '<td class="r">' + (row.weight === null ? '<span class="muted">未收录</span>' : fmtInt(row.weight)) + '</td>' +
+        '<td>' + esc(row.reason || '—') + '</td>' +
+        '<td>' + fmtTime(row.created_at) + '</td>' +
+        '<td><button type="button" class="btn danger" data-pb-first="' + esc(row.first) +
+        '" data-pb-second="' + esc(row.second) + '">解除</button></td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+function bindPairBanCard() {
+  var select = document.getElementById('pb-group');
+  if (select) {
+    select.addEventListener('change', function () {
+      state.pbGroup = select.value;
+      loadPairBans();
+    });
+  }
+  var add = document.getElementById('pb-add');
+  if (add) {
+    add.addEventListener('click', function () {
+      var group = pbGroup();
+      var first = (document.getElementById('pb-first').value || '').trim();
+      var second = (document.getElementById('pb-second').value || '').trim();
+      var reason = (document.getElementById('pb-reason').value || '').trim();
+      var box = document.getElementById('pb-msg');
+      if (Array.from(first).length !== 1 || Array.from(second).length !== 1) {
+        banner(box, 'error', '参数无效：', '前字与后字都必须恰好是 1 个字符'); return;
+      }
+      request('POST', '/api/pairbans', null,
+        { group: group, first: first, second: second, reason: reason }).then(function () {
+        document.getElementById('pb-first').value = '';
+        document.getElementById('pb-second').value = '';
+        document.getElementById('pb-reason').value = '';
+        banner(box, 'ok', '已添加：', '命中 ' + first + ' → ' + second + ' 时将截断并放弃回复。');
+        loadPairBans();
+      }).catch(function (err) { banner(box, 'error', '添加失败：', err.message); });
+    });
+  }
+  var list = document.getElementById('pb-list');
+  if (list) {
+    list.addEventListener('click', function (ev) {
+      var button = ev.target.closest ? ev.target.closest('[data-pb-first]') : null;
+      if (!button) return;
+      var first = button.getAttribute('data-pb-first');
+      var second = button.getAttribute('data-pb-second');
+      request('POST', '/api/pairbans/delete', null,
+        { group: pbGroup(), first: first, second: second }).then(function () {
+        var box = document.getElementById('pb-msg');
+        if (box) banner(box, 'ok', '已解除：', first + ' → ' + second + ' 不再拦截。');
+        loadPairBans();
+      }).catch(function (err) { showError(err.message); });
+    });
+  }
+  loadPairBans();
+}
+
+function drawGradeTimeline(canvas, grades) {
+  var c = fit(canvas);
+  if (!c) return;
+  var ctx = c.ctx;
+  if (!grades.length) { drawNoData(ctx, 0, 0, c.w, c.h); return; }
+  drawPanelLabel(ctx, 'A', 2, 2);
+  var L = 12, R = c.w - 12, T = 34, B = c.h - 44;
+  var maxSec = 1;
+  grades.forEach(function (g) { maxSec = Math.max(maxSec, num(g.seconds, 0)); });
+  var unit = (R - L) / grades.length;
+  var gap = 8;
+  var bw = Math.max(10, unit - gap);
+  var H = B - T;
+
+  grades.forEach(function (g, i) {
+    var sec = num(g.seconds, 0);
+    var frac = Math.sqrt(Math.max(0, sec) / maxSec);
+    var h = Math.max(3, frac * H);
+    var x = L + i * unit + (unit - bw) / 2;
+    var y = B - h;
+    var col = viridisCss(vmapT(i, grades.length));
+    ctx.fillStyle = col;
+    ctx.fillRect(x, y, bw, h);
+    ctx.strokeStyle = AXIS;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(bw) - 1, Math.max(Math.round(h), 1));
+    ctx.font = boldFont(12);
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(text(g.grade), x + bw / 2, y - 3);
+    // 时长标注（条太矮时放到图下方统一轴）
+    var lbl = fmtDurLabel(sec);
+    var px = fitTextH(ctx, lbl, bw + 6, 10, tickFont, 8.5);
+    ctx.font = tickFont(px);
+    ctx.fillStyle = MUTED;
+    ctx.textBaseline = 'top';
+    ctx.fillText(lbl, x + bw / 2, B + 6);
+    ctx.font = tickFont(10);
+    ctx.fillStyle = MUTED;
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(text(g.label), x + bw / 2, y - 18);
+  });
+
+  ctx.save();
+  ctx.strokeStyle = AXIS;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(L, Math.round(B) + 0.5);
+  ctx.lineTo(R, Math.round(B) + 0.5);
+  ctx.stroke();
+  ctx.font = labelFont(11);
+  ctx.fillStyle = INK;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('条高 ∝ √封禁时长（右侧标实际时长）', L, B + 24);
+  ctx.restore();
+}
+
+/* =========================================================================
+ * 11. 页面：用户质量分 / 系统
+ * ====================================================================== */
+function loadQualityUser(userId) {
+  var id = String(userId || '').trim();
+  if (!/^[1-9][0-9]{4,12}$/.test(id)) { showError('请输入有效的 QQ 号'); return; }
+  state.qualityUser = id;
+  return get('qualityDetail', '/api/quality/user', {user_id:id}).then(function () {
+    if (state.page === 'quality') renderQuality();
+  }).catch(function (err) { showError(err.message); });
+}
+
+function loadGateReport(id) {
+  state.gateReport = id;
+  cache.gatePageInfo = null;
+  return Promise.all([
+    get('gateReportDetail','/api/gate-report',{report_id:id}),
+    get('gatePageInfo','/api/gate-report/pdf-info',{report_id:id})
+  ]).then(function () {
+    if (state.page === 'quality') renderQuality();
+  }).catch(function (err) { showError(err.message); });
+}
+
+function gateReportHtml(report) {
+  if (!report) return '<p class="empty">选择左侧报告查看证据与处理意见。</p>';
+  var review = report.review || null;
+  var approved = report.status === 'approved';
+  var pdfUrl='/api/gate-report/pdf?report_id=' + encodeURIComponent(report.report_id);
+  var info=cache.gatePageInfo && cache.gatePageInfo.report_id===report.report_id
+    ? cache.gatePageInfo : null;
+  var count=info ? Math.min(num(info.page_count,0),12) : 0;
+  var html = '<div class="report-actions"><b>门禁触发报告 · PDF 预览</b>' +
+    '<a class="btn" href="' + esc(pdfUrl) + '" target="_blank" rel="noopener">单独打开 PDF</a></div>' +
+    '<div class="report-pages">' + (count ? Array.from({length:count},function (_,index) {
+      return '<img class="report-page" alt="报告第 ' + (index+1) + ' 页" loading="lazy" src="/api/gate-report/pdf-page?report_id=' +
+        encodeURIComponent(report.report_id) + '&page=' + (index+1) + '">';
+    }).join('') : '<p class="empty">正在生成报告预览…</p>') +
+    (info && num(info.page_count,0)>count ? '<p class="hint">更多页面请使用“单独打开 PDF”查看。</p>' : '') +
+    '</div>' +
+    '<div class="report-editor"><h3>审核意见</h3>';
+  if (approved) {
+    html += '<p>已批准：扣 ' + fmtInt(review.points) + ' 分；封禁 ' +
+      fmtInt(review.ban_seconds) + ' 秒。审核人：' + esc(report.reviewer || '—') +
+      '；原因：' + esc(review.reason) + '</p>';
+  } else if (report.status === 'pending' || report.status === 'applying' || report.status === 'shadow') {
+    if (report.mode === 'shadow') html += '<p class="banner warn">观察模式：模型行为不受此发现影响。仅在人工核对完整证据后批准处理。</p>';
+    html += '<div class="quality-form"><div class="field"><label for="reviewer">审核人</label>' +
+      '<input id="reviewer" type="text"></div><div class="field"><label for="review-points">扣分</label>' +
+      '<input id="review-points" type="number" min="0" max="100" step="1" value="' +
+      fmtInt(report.suggested_points) + '"></div><div class="field"><label for="review-ban">封禁秒数</label>' +
+      '<input id="review-ban" type="number" min="0" max="3600" step="1" value="' +
+      fmtInt(report.suggested_ban_seconds) + '"></div>' +
+      '<div class="field reason"><label for="review-reason">处理原因</label>' +
+      '<input id="review-reason" type="text" value="按报告建议"></div></div>' +
+      '<div class="toolbar"><button type="button" class="btn" id="report-approve">批准</button>' +
+      '<button type="button" class="btn danger" id="report-reject">不通过并删除</button></div>';
+  } else html += '<p>报告状态暂不可处理。</p>';
+  return html + '</div>';
+}
+
+function wireGateReview() {
+  var select=document.getElementById('gate-status');
+  if (select) select.onchange=function () {
+    state.gateStatus=select.value; state.gateReport=null;
+    cache.gateReportDetail=null; cache.gatePageInfo=null;
+    get('gateReports','/api/gate-reports',{status:state.gateStatus})
+      .then(renderQuality).catch(function (err) { showError(err.message); });
+  };
+  Array.prototype.forEach.call(document.querySelectorAll('.gate-open'),function (button) {
+    button.onclick=function () { loadGateReport(button.dataset.id); };
+  });
+  var report=cache.gateReportDetail;
+  if (!report || report.report_id !== state.gateReport) return;
+  var approve=document.getElementById('report-approve');
+  if (approve) approve.onclick=function () {
+    var points=Number(document.getElementById('review-points').value);
+    var ban=Number(document.getElementById('review-ban').value);
+    var reviewer=document.getElementById('reviewer').value.trim();
+    var reason=document.getElementById('review-reason').value.trim();
+    if (!reviewer || !reason || !Number.isInteger(points) || points<0 || points>100 ||
+        !Number.isInteger(ban) || ban<0 || ban>3600) {
+      showError('请填写审核人、处理原因和有效的扣分/封禁秒数'); return;
+    }
+    approve.disabled=true;
+    request('POST','/api/gate-report/approve',null,{report_id:report.report_id,
+      reviewer:reviewer,reason:reason,points:points,ban_seconds:ban}).then(function () {
+      state.gateReport=null; cache.gateReportDetail=null; cache.gatePageInfo=null;
+      return Promise.all([get('gateReports','/api/gate-reports',{status:state.gateStatus}),
+                          get('quality','/api/quality')]);
+    }).then(renderQuality).catch(function (err) { showError(err.message); approve.disabled=false; });
+  };
+  var reject=document.getElementById('report-reject');
+  if (reject) reject.onclick=function () {
+    reject.disabled=true;
+    request('POST','/api/gate-report/reject',null,{report_id:report.report_id})
+      .then(function () { state.gateReport=null; cache.gateReportDetail=null;
+        cache.gatePageInfo=null;
+        return get('gateReports','/api/gate-reports',{status:state.gateStatus}); })
+      .then(renderQuality).catch(function (err) { showError(err.message); reject.disabled=false; });
+  };
+}
+
+function renderQuality() {
+  var sec = currentSection();
+  var q = cache.quality || {status:'加载中',users:[],categories:[],changes:[]};
+  var detail = cache.qualityDetail && cache.qualityDetail.user_id === state.qualityUser
+    ? cache.qualityDetail : null;
+  var html = '<div class="page-intro"><h1>用户质量分</h1>' +
+    '<p>所有授权群共用一个 QQ 号分数。训练和模型回复各按分数独立抽样；系统通知不受影响。</p></div>' +
+    chips([chip('已记录用户',fmtInt(q.total_users || 0),'人'),
+           chip('门禁事件',fmtInt(q.total_events || 0),'条'),
+           chip('评分状态',text(q.status),'')]);
+  var rows=(cache.gateReports && cache.gateReports.reports) || [];
+  var report=(cache.gateReportDetail && cache.gateReportDetail.report_id===state.gateReport)
+    ? cache.gateReportDetail : null;
+  html += '<div class="review-layout"><div class="card"><h2>扣分审核</h2>' +
+    '<p class="sub">一个消息只产生一份报告。批准才扣分；不通过会删除待审报告。</p>' +
+    '<div class="field"><label for="gate-status">报告状态</label><select id="gate-status">' +
+    ['pending','shadow','applying','approved'].map(function (s) {
+      var names={pending:'待审批',shadow:'观察记录',applying:'处理中',approved:'历史报告'};
+      return '<option value="' + s + '"' + (state.gateStatus===s ? ' selected' : '') +
+        '>' + names[s] + '</option>';
+    }).join('') + '</select></div><div class="scroll tall"><table><thead><tr>' +
+    '<th>时间 / 群</th><th>QQ / 门禁</th></tr></thead><tbody>' +
+    (rows.length ? rows.map(function (r) {
+      return '<tr><td>' + fmtTime(r.occurred_at) + '<br>' + esc(groupLabel(r.group_id)) +
+        '</td><td><button type="button" class="btn sm gate-open" data-id="' + esc(r.report_id) +
+        '">' + esc(r.user_id) + ' · ' + esc(r.primary_category) + '</button></td></tr>';
+    }).join('') : '<tr><td colspan="2" class="empty">暂无报告</td></tr>') +
+    '</tbody></table></div></div><div class="review-report">' + gateReportHtml(report) + '</div></div>';
+  html += '<div class="grid two">' +
+    '<div class="card"><h2>查找与调整</h2>' +
+    '<p class="sub">01/02 事件只记录，不会自行扣分。手动调整会立即改变此人回复和训练的概率，并记入审计历史。</p>' +
+    '<div class="toolbar"><div class="field"><label for="q-search">QQ 号</label>' +
+    '<input id="q-search" type="text" inputmode="numeric" value="' + esc(state.qualityUser || '') + '"></div>' +
+    '<button type="button" class="btn" id="q-find">查询</button></div>' +
+    (detail ? '<div class="quality-score">' + fmtInt(detail.score) + '<small> / 100 · 训练与回复各 ' +
+      fmtInt(detail.score) + '%</small></div><p class="hint">QQ ' + esc(detail.user_id) +
+      ' · ' + esc(text(detail.version)) + '</p>' :
+      '<p class="empty">输入 QQ 号查看分数、门禁事件及调整历史。</p>') +
+    '<div class="quality-form"><div class="field"><label for="q-score">新分数（0–100）</label>' +
+    '<input id="q-score" type="number" min="0" max="100" step="1" value="' +
+      (detail ? fmtInt(detail.score) : '100') + '"></div>' +
+    '<div class="field reason"><label for="q-reason">调整原因（留痕）</label>' +
+    '<input id="q-reason" type="text" placeholder="例如：人工复核后调整"></div>' +
+    '<button type="button" class="btn" id="q-save">保存分数</button></div>' +
+    '<div id="q-message"></div></div>' +
+    '<div class="card"><h2>门禁类别</h2><p class="sub">类别独立统计，不混合为未经校准的自动扣分权重。</p>' +
+    '<div class="scroll"><table><thead><tr><th>类别</th><th class="r">事件数</th></tr></thead><tbody>' +
+    ((q.categories || []).length ? q.categories.map(function (r) {
+      return '<tr><td>' + esc(r.category) + '</td><td class="r">' + fmtInt(r.count) + '</td></tr>';
+    }).join('') : '<tr><td colspan="2" class="empty">暂无事件</td></tr>') +
+    '</tbody></table></div></div></div>';
+  html += '<div class="grid two"><div class="card"><h2>用户列表</h2>' +
+    '<p class="sub">按门禁事件数排序，最多显示 200 人；可直接查找其他 QQ 号。</p>' +
+    '<div class="scroll tall"><table><thead><tr><th>QQ 号</th><th class="r">分数</th><th class="r">门禁</th></tr></thead><tbody>' +
+    ((q.users || []).length ? q.users.map(function (r) {
+      return '<tr class="quality-row"><td><button type="button" class="btn sm q-open" data-user="' +
+        esc(r.user_id) + '">' + esc(r.user_id) + '</button></td><td class="r">' +
+        fmtInt(r.score) + '</td><td class="r">' + fmtInt(r.gate_events) + '</td></tr>';
+    }).join('') : '<tr><td colspan="3" class="empty">暂无用户记录</td></tr>') +
+    '</tbody></table></div></div>' +
+    '<div class="card"><h2>所选用户的门禁事件</h2>' +
+    '<div class="scroll tall"><table><thead><tr><th>时间</th><th>群</th><th>类别</th></tr></thead><tbody>' +
+    (detail && detail.events.length ? detail.events.map(function (r) {
+      return '<tr><td>' + fmtTime(r.at) + '</td><td>' + esc(groupLabel(r.group)) +
+        '</td><td>' + esc(r.category) + '</td></tr>';
+    }).join('') : '<tr><td colspan="3" class="empty">暂无事件</td></tr>') +
+    '</tbody></table></div></div></div>';
+  html += '<div class="grid one"><div class="card"><h2>分数调整历史</h2>' +
+    '<p class="sub">记录人工改分的原分、新分、原因与时间。最近 30 条全局记录。</p>' +
+    '<div class="scroll"><table><thead><tr><th>时间</th><th>QQ 号</th><th>变化</th><th>原因</th></tr></thead><tbody>' +
+    ((q.changes || []).length ? q.changes.map(function (r) {
+      return '<tr><td>' + fmtTime(r.at) + '</td><td class="mono">' + esc(r.user_id) +
+        '</td><td>' + fmtInt(r.old_score) + ' → ' + fmtInt(r.score) +
+        '</td><td>' + esc(r.reason) + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty">暂无调整记录</td></tr>') +
+    '</tbody></table></div></div></div>';
+  sec.innerHTML = html;
+  wireGateReview();
+  var find = document.getElementById('q-find');
+  if (find) find.onclick = function () { loadQualityUser(document.getElementById('q-search').value); };
+  var search = document.getElementById('q-search');
+  if (search) search.onkeydown = function (ev) { if (ev.key === 'Enter') loadQualityUser(search.value); };
+  Array.prototype.forEach.call(sec.querySelectorAll('.q-open'), function (button) {
+    button.onclick = function () { loadQualityUser(button.dataset.user); };
+  });
+  var save = document.getElementById('q-save');
+  if (save) save.onclick = function () {
+    var user = document.getElementById('q-search').value.trim();
+    var raw = document.getElementById('q-score').value.trim();
+    var reason = document.getElementById('q-reason').value.trim();
+    if (!/^[1-9][0-9]{4,12}$/.test(user) || !/^(100|[1-9]?[0-9])$/.test(raw) || !reason) {
+      showError('请填写有效 QQ 号、0–100 整数分数和调整原因'); return;
+    }
+    save.disabled = true;
+    request('POST','/api/quality/score',null,
+      {user_id:user,score:Number(raw),reason:reason}).then(function () {
+      clearError();
+      return Promise.all([get('quality','/api/quality'),
+        get('qualityDetail','/api/quality/user',{user_id:user})]);
+    }).then(function () {
+      state.qualityUser = user;
+      renderQuality();
+      var host = document.getElementById('q-message');
+      if (host) banner(host,'ok','分数已保存。','训练和回复的新概率已生效。');
+    }).catch(function (err) { showError(err.message); save.disabled = false; });
+  };
+}
+
+function renderSystem() {
+  var sec = currentSection();
+  var d = cache.system;
+  var html = '';
+  html += '<div class="grid">';
+
+  html += '<div class="card">' +
+    '<h2>自动刷新</h2>' +
+    '<p class="sub">默认<b>关闭</b>。开启后每 10 秒只重拉<b>本页（系统）</b>与数据大屏的纯展示数据。' +
+    '训练管理页与封禁管理页永不自动刷新——那两页含单字探索结果、转移下钻详情与各类表单，' +
+    '整块重绘会把用户正在看的结果和正在填的内容清空。焦点在输入框内时也不会刷新。</p>' +
+    '<label class="switch"><input type="checkbox" id="sys-auto"' + (state.auto ? ' checked' : '') + '> 每 10 秒自动刷新（仅纯展示页）</label>' +
+    '<p class="hint">最近刷新时间：<b id="sys-last">' + (state.lastRefresh ? fmtTime(state.lastRefresh / 1000) : DASH) + '</b></p>' +
+    '</div>';
+
+  if (!d) {
+    html += '<div class="card"><h2>运行状态</h2><p class="sub">正在加载 GET /api/system …</p></div>';
+    html += '</div>';
+    sec.innerHTML = html;
+    wireSystemSwitch();
+    return;
+  }
+
+  html += '<div class="card">' +
+    '<h2>运行状态<span class="aux">GET /api/system</span></h2>' +
+    '<p class="sub">pid / uptime 是<b>管理后台进程</b>自身的状态。</p>';
+
+  if (d.stop) {
+    html += '<div class="banner warn"><span class="head">STOP 开关已激活，发送已停止。</span> ' +
+      'runtime/STOP 文件存在，机器人不会向外发送任何消息；需要恢复请删除该文件。</div>';
+  }
+  html += miniChips([
+    chip('PID', d.pid === null || d.pid === undefined ? DASH : fmtInt(d.pid), ''),
+    chip('Python', text(d.python), ''),
+    chip('启动时间', fmtTime(d.started_at), ''),
+    chip('已运行 uptime', fmtDur(d.uptime), ''),
+    chip('日志大小 log_bytes', fmtBytes(d.log_bytes), ''),
+    chip('STOP 开关', d.stop ? '已激活' : '未激活', '')
+  ]);
+  html += '</div>';
+
+  html += '<div class="card">' +
+    '<h2>群数据库文件</h2>' +
+    '<p class="sub">每个群一个独立的 SQLite 文件。</p>' +
+    '<div class="scroll" style="max-height:280px"><table>' +
+    '<thead><tr><th>群</th><th>文件名</th><th class="r">字节数</th><th class="r">换算</th></tr></thead><tbody>' +
+    ((d.databases || []).length ? (d.databases || []).map(function (row) {
+      return '<tr><td>' + esc(groupLabel(row.group)) + '<div class="muted mono">' + esc(text(row.group)) + '</div></td>' +
+        '<td class="mono">' + esc(text(row.file)) + '</td>' +
+        '<td class="r">' + fmtInt(row.bytes) + '</td>' +
+        '<td class="r">' + fmtBytes(row.bytes) + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty">暂无数据</td></tr>') +
+    '</tbody></table></div></div>';
+  html += '</div>';
+
+  var q = d.quality || {status:'未初始化',users:[],categories:[]};
+  html += '<div class="grid">' +
+    '<div class="card"><h2>用户质量分</h2>' +
+    '<p class="sub">当前状态：' + esc(text(q.status)) +
+    '。01/02 门禁已记录；训练与模型回复分别按质量分抽样。校准前所有用户初始为 100 分，不降低概率。</p>' +
+    '<div class="scroll" style="max-height:260px"><table>' +
+    '<thead><tr><th>QQ 号</th><th class="r">分数 / 100</th><th class="r">门禁事件</th></tr></thead><tbody>' +
+    ((q.users || []).length ? q.users.map(function (row) {
+      return '<tr><td class="mono">' + esc(text(row.user_id)) + '</td>' +
+        '<td class="r">' + fmtInt(row.score) + '</td>' +
+        '<td class="r">' + fmtInt(row.gate_events) + '</td></tr>';
+    }).join('') : '<tr><td colspan="3" class="empty">暂无用户记录</td></tr>') +
+    '</tbody></table></div></div>' +
+    '<div class="card"><h2>门禁与表情缓存</h2>' +
+    '<p class="sub">01 长消息；02 封禁后首条消息。表情只缓存明确标记的表情包。</p>' +
+    '<div class="scroll" style="max-height:260px"><table>' +
+    '<thead><tr><th>门禁类别</th><th class="r">事件数</th></tr></thead><tbody>' +
+    ((q.categories || []).length ? q.categories.map(function (row) {
+      return '<tr><td>' + esc(text(row.category)) + '</td><td class="r">' +
+        fmtInt(row.count) + '</td></tr>';
+    }).join('') : '<tr><td colspan="2" class="empty">暂无触发记录</td></tr>') +
+    '</tbody></table></div>' +
+    '<p class="hint">各群表情缓存：' +
+    ((d.stickers || []).length ? d.stickers.map(function (row) {
+      return esc(groupLabel(row.group)) + ' ' + fmtInt(row.assets) + ' 张';
+    }).join('；') : '暂无') + '</p></div></div>';
+
+  html += '<div class="grid one"><div class="card">' +
+    '<div class="card-head"><div class="grow">' +
+      '<h2>运行日志<span class="aux">runtime/bot.log，最多 120 行</span></h2>' +
+      '<p class="sub">日志以 textContent 写入，不会被当作 HTML 解析。</p>' +
+    '</div>' +
+    '<div><button type="button" class="btn" id="log-refresh">刷新日志</button></div>' +
+    '</div>' +
+    '<p class="hint" id="log-meta"></p>' +
+    '<pre class="log" id="log-pre"></pre>' +
+    '</div></div>';
+
+  sec.innerHTML = html;
+  wireSystemSwitch();
+  var lr = document.getElementById('log-refresh');
+  if (lr) lr.addEventListener('click', function () { loadLog(true); });
+  renderLog();
+}
+
+function wireSystemSwitch() {
+  var box = document.getElementById('sys-auto');
+  if (!box) return;
+  box.addEventListener('change', function () {
+    state.auto = box.checked;
+    try { localStorage.setItem('qbot.auto', state.auto ? '1' : '0'); } catch (e) { /* 忽略 */ }
+    updateFoot();
+  });
+}
+
+function renderLog() {
+  var pre = document.getElementById('log-pre');
+  if (!pre) return;
+  var lines = (cache.log && cache.log.lines) || [];
+  var meta = document.getElementById('log-meta');
+  if (!lines.length) {
+    pre.textContent = '暂无日志（runtime/bot.log 不存在或为空）';
+    if (meta) meta.textContent = '';
+    return;
+  }
+  pre.textContent = lines.join('\n');
+  if (meta) meta.textContent = '共 ' + lines.length + ' 行（末尾 120 行）';
+}
+
+function loadLog(force) {
+  return get('log', '/api/log').then(function () {
+    if (state.page === 'system') renderLog();
+  }).catch(function (err) {
+    if (state.page === 'system') {
+      var pre = document.getElementById('log-pre');
+      if (pre) pre.textContent = '加载日志失败：' + err.message;
+    }
+    showError(err.message);
+  });
+}
+
+/* =========================================================================
+ * 12. 刷新调度 / 渲染分发 / 事件
+ * ====================================================================== */
+function updateFoot() {
+  foot.textContent = '自动刷新：' + (state.auto ? '已开启（训练页除外）' : '已关闭') +
+    ' · 最近刷新时间：' + (state.lastRefresh ? fmtTime(state.lastRefresh / 1000) : '—') +
+    ' · 接口 GET /api/overview /api/bans /api/match /api/generate /api/dictionary /api/system';
+  var last = document.getElementById('sys-last');
+  if (last) last.textContent = state.lastRefresh ? fmtTime(state.lastRefresh / 1000) : DASH;
+}
+
+/* 自动刷新会重建当前页 DOM，因此渲染前先保存用户正在填写的值与勾选状态，
+   渲染后原样贴回；否则输入框会被无故清空。 */
+function snapshotFields() {
+  var kept = {};
+  var nodes = document.querySelectorAll('input[id], textarea[id], select[id]');
+  for (var i = 0; i < nodes.length; i++) {
+    var node = nodes[i];
+    if (node.type === 'checkbox' || node.type === 'radio') kept[node.id] = { checked: node.checked };
+    else kept[node.id] = { value: node.value };
+  }
+  return kept;
+}
+
+function restoreFields(kept) {
+  if (!kept) return;
+  Object.keys(kept).forEach(function (id) {
+    var node = document.getElementById(id);
+    if (!node) return;
+    var saved = kept[id];
+    if (Object.prototype.hasOwnProperty.call(saved, 'checked')) node.checked = saved.checked;
+    else if (node.value !== saved.value) node.value = saved.value;
+  });
+}
+
+/** 自动刷新只允许作用于这些「纯展示」页面 */
+var AUTO_PAGES = { system: true };
+
+/** 焦点在输入控件上时绝不重绘，避免打断输入法的组合输入。 */
+function typingNow() {
+  var el = document.activeElement;
+  if (!el || !el.tagName) return false;
+  var tag = el.tagName.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
+}
+
+function refreshCurrent(silent) {
+  var page = state.page;
+  var tasks = [];
+  tasks.push(get('overview', '/api/overview').catch(function (err) {
+    showError(err.message);
+    return null;
+  }));
+  if (page === 'bans' && state.group) {
+    tasks.push(get('bans', '/api/bans', { group: state.group }).catch(function (err) {
+      showError(err.message); return null;
+    }));
+  }
+  if (page === 'train' && state.group) {
+    tasks.push(get('match', '/api/match', { group: state.group }).catch(function (err) {
+      showError(err.message); return null;
+    }));
+    var gq = { group: state.group };
+    Object.keys(genUserParam()).forEach(function (k) { gq[k] = genUserParam()[k]; });
+    tasks.push(get('generate', '/api/generate', gq).catch(function (err) {
+      showError(err.message); return null;
+    }));
+    tasks.push(get('generateUsers', '/api/generate/users', { group: state.group }).catch(function (err) {
+      showError(err.message); return null;
+    }));
+  }
+  if (page === 'dict') {
+    tasks.push(get('dict', '/api/gates').catch(function (err) { showError(err.message); return null; }));
+  }
+  if (page === 'system') {
+    tasks.push(get('system', '/api/system').catch(function (err) { showError(err.message); return null; }));
+    tasks.push(get('log', '/api/log').catch(function (err) { showError(err.message); return null; }));
+  }
+  if (page === 'quality') {
+    tasks.push(get('quality', '/api/quality').catch(function (err) { showError(err.message); return null; }));
+    tasks.push(get('gateReports','/api/gate-reports',{status:state.gateStatus})
+      .catch(function (err) { showError(err.message); return null; }));
+    if (state.qualityUser) tasks.push(get('qualityDetail', '/api/quality/user',
+      {user_id:state.qualityUser}).catch(function (err) { showError(err.message); return null; }));
+  }
+  return Promise.all(tasks).then(function () {
+    state.lastRefresh = Date.now();
+    updateFoot();
+    if (state.page === page) {
+      var kept = snapshotFields();
+      renderPage();
+      restoreFields(kept);
+    }
+  });
+}
+
+function renderPage() {
+  clearErrorUnless();
+  if (state.page === 'overview') renderOverview();
+  else if (state.page === 'bans') renderBans();
+  else if (state.page === 'train') renderTrain();
+  else if (state.page === 'dict') renderDict();
+  else if (state.page === 'quality') renderQuality();
+  else if (state.page === 'system') renderSystem();
+  renderBanners();
+}
+
+/** 切页时清掉上一页的残留错误（1.5 秒内的新错误保留） */
+function clearErrorUnless() {
+  if (GLOBAL_ERROR && Date.now() - errorStamp > 1500) { GLOBAL_ERROR = ''; errorStamp = 0; }
+}
+
+function switchPage(page) {
+  if (PAGES.indexOf(page) < 0) page = 'overview';
+  state.page = page;
+  Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) {
+    b.classList.toggle('on', b.dataset.page === page);
+  });
+  PAGES.forEach(function (p) {
+    var el = document.getElementById('page-' + p);
+    if (el) el.classList.toggle('hidden', p !== page);
+  });
+  GLOBAL_ERROR = '';
+  if (page === 'train') { cache.match = null; cache.generate = null; cache.generateUsers = null; }
+  else state.pair = null;   // 离开训练页时收起下钻详情
+  renderPage();
+  refreshCurrent(true);
+  try { history.replaceState(null, '', '#' + page); } catch (e) { /* file:// 下可能受限 */ }
+}
+
+function renderAll() {
+  renderShell();
+  renderPage();
+}
+
+/* 标签页导航 */
+var tabsBar = document.getElementById('tabs');
+if (tabsBar) tabsBar.addEventListener('click', function (ev) {
+  var btn = ev.target.closest('button[data-page]');
+  if (btn) switchPage(btn.dataset.page);
+});
+
+window.addEventListener('hashchange', function () {
+  var p = (location.hash || '').replace('#', '');
+  if (PAGES.indexOf(p) >= 0 && p !== state.page) switchPage(p);
+});
+
+/* 窗口尺寸变化：防抖后重绘当前页所有 canvas */
+var resizeTimer = null;
+window.addEventListener('resize', function () {
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function () { redrawCanvas(); }, 150);
+});
+
+function redrawCanvas() {
+  if (state.page === 'overview') drawOverviewCharts();
+  else if (state.page === 'train') {
+    if (state.trainTab === 'match') drawMatchCharts(cache.match);
+    else {
+      drawGenerateCharts(cacheScopeMatches(cache.generate) ? cache.generate : null);
+      if (cache.explore && cacheScopeMatches(cache.explore) && document.getElementById('cv-ex-heat')) {
+        drawHeatmap(document.getElementById('cv-ex-heat'), cache.explore.heatmap);
+        drawNetwork(document.getElementById('cv-ex-net'), cache.explore.graph, cache.explore.char);
+        var zc = document.getElementById('cv-ex-zipf');
+        if (zc) drawRankAbundance(zc, cache.explore.successors || []);
+        var lc = document.getElementById('cv-ex-lift');
+        if (lc) drawLiftChart(lc, cache.explore.successors || []);
+      }
+      var pcv = document.getElementById('cv-pair-contrib');
+      if (pcv && cache.pairDetail && cache.pairDetail.contributors) {
+        drawContributorChart(pcv, cache.pairDetail.contributors, num(cache.pairDetail.weight, 0));
+      }
+    }
+  } else if (state.page === 'dict') {
+    var cv = document.getElementById('cv-dict-grades');
+    if (cv && cache.dict) drawGradeTimeline(cv, cache.dict.grades || []);
+  }
+}
+
+/* 自动刷新：只作用于「纯展示」页面 —— 训练页承载输入框、单字探索结果与转移下钻详情，
+   封禁页承载表单，整块重绘都会把用户正在看的内容与正在填的内容刷走，因此这两页永不自动刷新。 */
+setInterval(function () {
+  if (!state.auto) return;
+  if (typeof document.hidden === 'boolean' && document.hidden) return;
+  if (!AUTO_PAGES[state.page]) return;
+  if (typingNow()) return;
+  refreshCurrent(true);
+}, 10000);
+
+/* 启动 */
+(function boot() {
+  var p = (location.hash || '').replace('#', '');
+  if (PAGES.indexOf(p) >= 0) state.page = p;
+  renderAll();
+  switchPage(state.page);
+  updateFoot();
+})();
+})();
+</script>
+</body>
+</html>
