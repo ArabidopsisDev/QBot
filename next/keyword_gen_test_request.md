@@ -69,13 +69,24 @@ python -B -X utf8 keyword_gen.py tally --out runtime\keyword_gen_work_export
 
 ## 回传内容
 
-新建分支，只提交以下文件到 `results/keyword_gen/<运行名>/`（运行名如 `export`、`1050045834`）：
+测试完成后**直接把结果推送到 GitHub**（`ArabidopsisDev/QBot` 的 `keyword-gen-results` 分支，不需要另开 PR；分支不存在就从合并本 PR 后的 `main` 新建）。只提交以下文件到 `results/keyword_gen/<运行名>/`（运行名如 `export`、`1050045834`）：
 
 - `metrics.json`（只含汇总统计、哈希与参数，不含原文）
 - `tally.json`（如做了第 4 步）
 - `notes.md`：测试机 Python 版本、第 1 步测试结果、每次运行的命令、导出的大致时间范围与消息量；以及对失败类型的**描述性**观察（如“常从关键字前接不相关短语”），**不要粘贴原文**。
 
-提交前用 `git status` 确认没有 `.tsv`、`answer_key.json`、`.sqlite3` 被加入。推送后开 PR 或在本 PR 回复。
+```powershell
+git switch -c keyword-gen-results   # 已存在则 git switch keyword-gen-results
+New-Item -ItemType Directory -Force results\keyword_gen\export | Out-Null
+Copy-Item runtime\keyword_gen_work_export\metrics.json, runtime\keyword_gen_work_export\tally.json results\keyword_gen\export\
+# 其余运行同理；再写 results\keyword_gen\notes.md
+git add results\keyword_gen
+git status --short   # 只应出现 results\keyword_gen 下的 .json / .md
+git commit -m "keyword_gen test results"
+git push -u origin keyword-gen-results
+```
+
+提交前务必确认没有 `.tsv`、`answer_key.json`、`.sqlite3` 被加入；发现就 `git restore --staged` 移除后再提交。
 
 ## 看哪些指标
 
