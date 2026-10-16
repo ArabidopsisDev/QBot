@@ -1,0 +1,47 @@
+{
+  "source": {
+    "db": "data\\fourth.sqlite3",
+    "snapshot_sha256": "fd060d854fd90b2bad58915d08a293d7c8d246221950be44ff70b09ad20dea0d"
+  },
+  "prompt_source": "intel_memory_in_training",
+  "held_out": false,
+  "boundaries": "whole_messages",
+  "boundary_messages": 298,
+  "params": {
+    "seed": 1,
+    "attempts": 64,
+    "blend": 0.0,
+    "refine": 0.3,
+    "group": "929618496",
+    "stop_top": 24
+  },
+  "code_sha256": "14e1a0aa17c34e247370c02640b5587d02e71c16ae0e43aff54682eb024a695e",
+  "baseline": {
+    "prompts": 200,
+    "no_reply_rate": 0.33,
+    "length_median": 15.0,
+    "length_mean": 18.19,
+    "continuation_edge_rate": 1.0,
+    "keyword_overlap_rate": 0.1642,
+    "whole_message_copy_rate": 0.0,
+    "longest_copy_median": 4.0,
+    "longest_copy_ratio_mean": 0.35,
+    "distinct_reply_rate": 0.9851,
+    "latency_ms_median": 0.99,
+    "latency_ms_p95": 4.25
+  },
+  "keyword": {
+    "prompts": 200,
+    "no_reply_rate": 0.05,
+    "length_median": 18.0,
+    "length_mean": 20.95,
+    "continuation_edge_rate": 0.0737,
+    "keyword_overlap_rate": 1.0,
+    "whole_message_copy_rate": 0.0,
+    "longest_copy_median": 4.0,
+    "longest_copy_ratio_mean": 0.2599,
+    "distinct_reply_rate": 1.0,
+    "latency_ms_median": 5.27,
+    "latency_ms_p95": 8.5
+  }
+}
